@@ -9,6 +9,7 @@ import { OrchestrationSidebarAgents } from "../../features/orchestration/ui/Orch
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Archive,
+  ArrowDownCircle,
   Chatting,
   Check,
   ChevronDown,
@@ -313,6 +314,8 @@ type Props = {
   onOpenProject?: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
   onNew?: () => string | void;
+  /** Open the import dialog for a Claude Code or Codex CLI session. */
+  onImportSession?: () => void;
   onNewTerminal?: () => void;
   onSearch?: () => void;
   onOpenInbox?: () => void;
@@ -413,6 +416,7 @@ function SidebarComponent({
   onOpenProject,
   onRemoveProject,
   onNew,
+  onImportSession,
   onSearch,
   onOpenInbox,
   onOpenInboxItem,
@@ -1690,7 +1694,11 @@ function SidebarComponent({
           </span>
         )}
       </div>
-      <WorkspaceTitleActions onSearch={onGoToFile} onNew={onNew} />
+      <WorkspaceTitleActions
+        onSearch={onGoToFile}
+        onImportSession={onImportSession}
+        onNew={onNew}
+      />
     </div>
   );
 
@@ -2776,12 +2784,14 @@ function CompactRailAction({
 
 function WorkspaceTitleActions({
   onSearch,
+  onImportSession,
   onNew,
 }: {
   onSearch?: () => void;
+  onImportSession?: () => void;
   onNew?: () => void;
 }) {
-  if (!onSearch && !onNew) return null;
+  if (!onSearch && !onImportSession && !onNew) return null;
   return (
     <div
       className="flex shrink-0 items-center gap-0.5"
@@ -2790,6 +2800,11 @@ function WorkspaceTitleActions({
       {onSearch ? (
         <IconButton label={`Go to File (${MOD}P)`} onClick={onSearch}>
           <Search className="size-3.5" strokeWidth={1.75} />
+        </IconButton>
+      ) : null}
+      {onImportSession ? (
+        <IconButton label="Import CLI session" onClick={onImportSession}>
+          <ArrowDownCircle className="size-3.5" strokeWidth={1.75} />
         </IconButton>
       ) : null}
       {onNew ? (

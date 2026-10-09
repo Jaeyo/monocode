@@ -1,4 +1,4 @@
-import { RefreshCw, Search } from "../../../shared/ui/icons";
+import { ArrowDownCircle, RefreshCw, Search } from "../../../shared/ui/icons";
 import {
   useEffect,
   useMemo,
@@ -30,6 +30,7 @@ type Action = {
   id: string;
   label: string;
   hint?: string;
+  icon?: typeof RefreshCw;
 };
 
 type RankedAction = Action & FuzzyHit;
@@ -41,6 +42,12 @@ const ACTIONS: Action[] = [
   { id: "reload", label: "Reload MonoCode", hint: reloadActionHint() },
 ];
 
+const IMPORT_SESSION_ACTION: Action = {
+  id: "import_cli_session",
+  label: "Import CLI Session…",
+  icon: ArrowDownCircle,
+};
+
 type Props = {
   open: boolean;
   cwd: string;
@@ -48,6 +55,8 @@ type Props = {
   initialQuery?: string;
   onOpenFile: OpenFileFn;
   onRunAction: (id: string) => void;
+  /** Offer importing a Claude Code or Codex session into this project. */
+  canImportSession?: boolean;
   onClose: () => void;
 };
 
@@ -58,6 +67,7 @@ export function FilePicker({
   initialQuery = "",
   onOpenFile,
   onRunAction,
+  canImportSession = false,
   onClose,
 }: Props) {
   const peekFiles = () => peekProjectFiles(cwd);
@@ -87,20 +97,24 @@ export function FilePicker({
     () => (paletteMode ? [] : rankProjectFiles(files, query, recents)),
     [files, paletteMode, query, recents],
   );
+  const actions = useMemo(
+    () => (canImportSession ? [...ACTIONS, IMPORT_SESSION_ACTION] : ACTIONS),
+    [canImportSession],
+  );
   const actionResults = useMemo((): RankedAction[] => {
     if (!paletteMode) return [];
     if (!actionQuery) {
-      return ACTIONS.map((action) => ({
+      return actions.map((action) => ({
         ...action,
         score: 0,
         positions: [],
       }));
     }
-    return ACTIONS.flatMap((action) => {
+    return actions.flatMap((action) => {
       const hit = fuzzyMatch(actionQuery, action.label);
       return hit ? [{ ...action, ...hit }] : [];
     }).sort((a, b) => b.score - a.score);
-  }, [actionQuery, paletteMode]);
+  }, [actionQuery, actions, paletteMode]);
   const optionCount = paletteMode ? actionResults.length : results.length;
 
   useEffect(() => {
@@ -327,6 +341,7 @@ function ActionList({
     >
       {actions.map((action, index) => {
         const highlighted = index === active;
+        const Icon = action.icon ?? RefreshCw;
         return (
           <button
             key={action.id}
@@ -341,7 +356,7 @@ function ActionList({
               highlighted ? "bg-selection text-content" : "text-content"
             }`}
           >
-            <RefreshCw
+            <Icon
               className="size-4 shrink-0 text-content/50"
               strokeWidth={1.75}
             />
