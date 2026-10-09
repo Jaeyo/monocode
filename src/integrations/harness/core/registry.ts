@@ -9,6 +9,10 @@ import type { GeneratedSessionTitle } from "../../../features/sessions/model/ses
 import type { PrContent } from "../../../features/source-control/model/gitText";
 import { hasLiveCatalog } from "../../../features/sessions/model/models";
 import type { UserQuestionReply } from "../../../features/sessions/model/userQuestion";
+import type {
+  ExternalSessionImport,
+  ExternalSessionImportInput,
+} from "./externalSessions";
 import type { NativeCommandProvider } from "./nativeCommands";
 import type {
   ApprovalDecision,
@@ -88,6 +92,10 @@ export type HarnessAdapter = {
   ): void;
   /** Seed provider task state from a restored session's persisted panels. */
   restoreTaskLists?(threadId: string, lists: TaskListMeta[]): void;
+  /** Rebuild a conversation started outside MonoCode so it can be imported. */
+  importExternalSession?(
+    input: ExternalSessionImportInput,
+  ): Promise<ExternalSessionImport>;
   /** Refresh the model catalog overlay when supported. */
   refreshCatalog?(): Promise<void>;
   /** Optional LLM tab title for the first turn. */
@@ -368,6 +376,17 @@ export async function forgetHarnessSession(
   const adapter = getHarness(harness);
   if (!adapter) return;
   await adapter.forgetSession(sessionId);
+}
+
+/** Rebuild a provider conversation started outside MonoCode. */
+export async function importHarnessSession(
+  harness: HarnessId,
+  input: ExternalSessionImportInput,
+): Promise<ExternalSessionImport> {
+  const adapter = getHarness(harness);
+  if (!adapter?.importExternalSession)
+    throw new Error("Sessions from this provider cannot be imported.");
+  return adapter.importExternalSession(input);
 }
 
 export function bindHarnessSession(

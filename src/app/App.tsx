@@ -88,6 +88,16 @@ import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
 import { HarnessUpdateNotice } from "../features/providers/ui/HarnessUpdateNotice";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
 import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDialog";
+import { ImportSessionDialog } from "../features/sessions/ui/ImportSessionDialog";
+import {
+  buildImportedSession,
+  externalSessionPlacement,
+  importedAccountId,
+  importedSessionTitle,
+  ownedProviderSessions,
+  type ProjectCheckout,
+} from "../features/sessions/model/externalImport";
+import type { ExternalSession } from "../platform/tauri/externalSessions";
 import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
 import { WindowControls } from "./shell/WindowControls";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
@@ -268,6 +278,7 @@ import {
   appendUser,
   appendSteerUser,
   bindHarnessSession,
+  importHarnessSession,
   cancelHarnessTurn,
   canCompactHarnessContext,
   canRewindHarnessLastTurn,
@@ -1060,6 +1071,11 @@ function Workspace({
   const [sessions, setSessions] = useState<Session[]>(
     () => windowTransfer?.sessions ?? resumed?.sessions ?? [seed.session],
   );
+  const [importSessionDialog, setImportSessionDialog] = useState<{
+    projectRoot: string;
+    worktrees: ProjectCheckout[];
+    ownedSessions: Map<string, string>;
+  } | null>(null);
   const [sessionDeleteDialog, setSessionDeleteDialog] = useState<{
     title: string;
     unusedWorktree: string;
@@ -4844,6 +4860,85 @@ function Workspace({
       replaceBlankPaneWithSession,
       revealLinkedSessionUpdate,
     ],
+  );
+
+  const canImportSession =
+    looksLikeProject(sidebarCwd) && !isRemoteProjectPath(sidebarCwd);
+
+  const onOpenImportSession = useCallback(async () => {
+    const projectRoot = sidebarCwd;
+    if (!looksLikeProject(projectRoot) || isRemoteProjectPath(projectRoot))
+      return;
+    const [worktrees, stored] = await Promise.all([
+      // Outside a repository only the project folder itself counts.
+      listWorktrees(projectRoot)
+        .then((result) => result.worktrees)
+        .catch(() => []),
+      listSessionsByProject(projectRoot).catch(() => []),
+    ]);
+    setImportSessionDialog({
+      projectRoot,
+      worktrees: worktrees.map(({ path, branch }) => ({ path, branch })),
+      // Archived rows count too: importing again would fork the same thread.
+      ownedSessions: ownedProviderSessions([...sessionsRef.current, ...stored]),
+    });
+  }, [sidebarCwd]);
+
+  const onImportExternalSession = useCallback(
+    async (
+      external: ExternalSession,
+      projectRoot: string,
+      worktrees: readonly ProjectCheckout[],
+    ) => {
+      const placement = externalSessionPlacement(
+        external.cwd,
+        projectRoot,
+        worktrees,
+      );
+      if (!placement)
+        throw new Error("This session was started in another project.");
+      const providerAccountId = importedAccountId(external.accountId);
+      const imported = await importHarnessSession(external.provider, {
+        providerSessionId: external.id,
+        cwd: external.cwd,
+        providerAccountId,
+      });
+      if (imported.turns.length === 0)
+        throw new Error("This session has no messages to import.");
+      const base = newSession(
+        external.provider,
+        placement.cwd,
+        imported.model,
+        sessionDefaults?.runtimeMode,
+      );
+      const session = buildImportedSession(
+        {
+          ...base,
+          ...(placement.worktreeCwd
+            ? { worktreeCwd: placement.worktreeCwd, branch: placement.branch }
+            : {}),
+        },
+        imported,
+        { providerSessionId: external.id, providerAccountId },
+        importedSessionTitle(external),
+      );
+      bindHarnessSession(
+        session.harness,
+        session.id,
+        external.id,
+        sessionWorkCwd(session),
+        providerAccountId,
+        session.blocks,
+      );
+      await upsertSession(session);
+      const tab = newTab(session.id);
+      setSessions((current) => [...current, session]);
+      appendTab(tab, session.cwd);
+      setActiveTabId(tab.id);
+      setComposerFocused(true);
+      setImportSessionDialog(null);
+    },
+    [appendTab, sessionDefaults?.runtimeMode],
   );
 
   const onOpenMonoLaunchedSession = useCallback(
@@ -12608,6 +12703,11 @@ function Workspace({
               }
               monoViewActive={monoCovers}
               onNew={onNew}
+              onImportSession={
+                canImportSession
+                  ? () => void onOpenImportSession()
+                  : undefined
+              }
               openSessions={openProjectSessions}
               onNewTerminal={onNewTerminal}
               onSearch={onOpenSearch}
@@ -13095,8 +13195,30 @@ function Workspace({
               onOpenFile={onOpenFile}
               onRunAction={(id) => {
                 if (id === "reload") actions.current.onReload();
+                if (id === "import_cli_session") void onOpenImportSession();
               }}
+              canImportSession={canImportSession}
               onClose={() => setFilePickerOpen(false)}
+            />
+          ) : null}
+
+          {importSessionDialog ? (
+            <ImportSessionDialog
+              projectRoot={importSessionDialog.projectRoot}
+              worktrees={importSessionDialog.worktrees}
+              ownedSessions={importSessionDialog.ownedSessions}
+              onImport={(external) =>
+                onImportExternalSession(
+                  external,
+                  importSessionDialog.projectRoot,
+                  importSessionDialog.worktrees,
+                )
+              }
+              onOpenExisting={(sessionId) => {
+                setImportSessionDialog(null);
+                void onSelectHistorySession(sessionId);
+              }}
+              onClose={() => setImportSessionDialog(null)}
             />
           ) : null}
 

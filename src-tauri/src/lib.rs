@@ -11,6 +11,7 @@ mod control;
 pub mod control_cli;
 mod cursor_store;
 mod external_editor;
+mod external_sessions;
 mod fs;
 mod gitlab;
 mod harness;
@@ -417,6 +418,9 @@ pub fn run() {
             fs::omp_session_interjections,
             fs::omp_active_assistant_texts,
             fs::claude_shell_commands,
+            external_sessions::list_external_sessions,
+            external_sessions::find_external_session,
+            external_sessions::read_claude_session_records,
             fs::write_text_file,
             skills::list_skills,
             search::search_project,
