@@ -42,6 +42,7 @@ import {
 } from "../model/linkedSessionSeen";
 import { loadHiddenLinearTeamIds } from "../model/linear";
 import { loadInboxFeatured } from "../model/inboxFeatured";
+import { githubPollFactor } from "../model/githubRateLimit";
 import { JIRA_CHANGE_EVENT, loadHiddenJiraProjectIds } from "../model/jira";
 import type { RecentProject } from "../../projects/model/recents";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
@@ -295,7 +296,8 @@ export function useInboxActivity(
     // events share the cadence so frequent focus changes cannot flood GitHub.
     const poll = () => {
       if (pulling) return;
-      const interval = document.hidden ? HIDDEN_POLL_MS : POLL_MS;
+      const interval =
+        (document.hidden ? HIDDEN_POLL_MS : POLL_MS) * githubPollFactor();
       if (
         lastPulledAt.current != null &&
         Date.now() - lastPulledAt.current < interval

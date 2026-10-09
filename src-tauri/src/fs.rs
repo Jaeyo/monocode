@@ -4095,6 +4095,29 @@ struct GitHubRateLimitBackoff {
 // Shared by all webviews, including background Inbox and PR checks requests.
 static GITHUB_RATE_LIMIT_BACKOFF: Mutex<Option<GitHubRateLimitBackoff>> = Mutex::new(None);
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubBackoffStatus {
+    /// Unix milliseconds when `gh` calls resume.
+    pub until: u64,
+    pub error: String,
+}
+
+/// The active rate-limit pause, if any, so the Inbox can say until when.
+#[tauri::command]
+pub fn github_rate_limit_backoff() -> Option<GitHubBackoffStatus> {
+    let mut slot = GITHUB_RATE_LIMIT_BACKOFF.lock().ok()?;
+    github_rate_limit_error(&mut slot, SystemTime::now())?;
+    let active = slot.as_ref()?;
+    Some(GitHubBackoffStatus {
+        until: active
+            .until
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as u64),
+        error: active.error.clone(),
+    })
+}
+
 fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
     gh_with_backoff(
         &GITHUB_RATE_LIMIT_BACKOFF,

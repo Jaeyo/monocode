@@ -83,6 +83,7 @@ import {
   filterInboxItems,
   type GithubIssueAction,
   type GithubLabel,
+  type GithubRateLimit,
   type GithubPrAction,
   type GithubPrDiff,
   GITHUB_WORK_ITEM_FRESH_MS,
@@ -132,6 +133,10 @@ import {
   unfeatureInboxKeys,
   useInboxFeatured,
 } from "../model/inboxFeatured";
+import {
+  githubQuotaMessage,
+  useGithubQuota,
+} from "../model/githubRateLimit";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
@@ -308,6 +313,24 @@ function InboxProjectMark({
       className="size-3 shrink-0"
     />
   );
+}
+
+function refreshTitle(
+  fetchedAt: number | null,
+  rateLimit: GithubRateLimit | null,
+): string {
+  const parts = ["Refresh"];
+  if (fetchedAt != null) {
+    parts.push(
+      `updated ${formatRelativeTime(new Date(fetchedAt).toISOString())}`,
+    );
+  }
+  if (rateLimit) {
+    parts.push(
+      `GitHub ${rateLimit.remaining.toLocaleString()} of ${rateLimit.limit.toLocaleString()} left this hour`,
+    );
+  }
+  return parts.join(" · ");
 }
 
 function peekInboxForRail(recents: RecentProject[], cwd: string) {
@@ -970,6 +993,8 @@ export function InboxView({
   const searchNarrowed = searchInput.trim().length > 0;
   const narrowedByUser = searchNarrowed || filtersActive;
   const sourceError = source ? (providerErrors[source] ?? null) : null;
+  const githubQuota = useGithubQuota();
+  const githubQuotaNotice = githubQuotaMessage(githubQuota, Date.now());
 
   const listRows = useMemo(
     () =>
@@ -1342,11 +1367,7 @@ export function InboxView({
           <button
             type="button"
             aria-label="Refresh"
-            title={
-              fetchedAt == null
-                ? "Refresh"
-                : `Refresh · updated ${formatRelativeTime(new Date(fetchedAt).toISOString())}`
-            }
+            title={refreshTitle(fetchedAt, githubQuota.rateLimit)}
             onClick={() => setRefresh((value) => value + 1)}
             className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
           >
@@ -1496,6 +1517,14 @@ export function InboxView({
           </ul>
         )}
       </div>
+      {(source === "github" || featuredTab) && githubQuotaNotice ? (
+        <p
+          role="status"
+          className="flex h-8 shrink-0 items-center border-t border-stroke px-3 text-[11px] text-content/50"
+        >
+          <span className="min-w-0 flex-1 truncate">{githubQuotaNotice}</span>
+        </p>
+      ) : null}
       {featuredTab && (clearedFeatured || missingFeatured.length > 0) ? (
         <div className="flex h-8 shrink-0 items-center gap-2 border-t border-stroke px-3 text-[11px] text-content/50">
           {clearedFeatured ? (

@@ -47,6 +47,7 @@ import {
   refreshGithubRepos,
   rememberDiscovery,
 } from "./githubInboxSnapshots";
+import { recordGithubRefresh } from "./githubRateLimit";
 import { isGithubDotcom } from "./githubHost";
 
 export type GithubTaskKind = "issue" | "pr";
@@ -924,6 +925,7 @@ async function fetchGithubInboxItems(
     query,
     { list: listGithubInboxItems, probe: probeGithubInboxRepos },
   );
+  void recordGithubRefresh(refreshed.rateLimit, refreshed.error);
   const pathByRepo = new Map(
     projects.map((project) => [project.repo.toLowerCase(), project.path]),
   );
