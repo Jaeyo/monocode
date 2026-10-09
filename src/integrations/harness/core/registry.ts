@@ -9,6 +9,10 @@ import type { GeneratedSessionTitle } from "../../../features/sessions/model/ses
 import type { PrContent } from "../../../features/source-control/model/gitText";
 import { hasLiveCatalog } from "../../../features/sessions/model/models";
 import type { UserQuestionReply } from "../../../features/sessions/model/userQuestion";
+import type {
+  ExternalSessionImport,
+  ExternalSessionImportInput,
+} from "./externalSessions";
 import type { NativeCommandProvider } from "./nativeCommands";
 import type {
   ApprovalDecision,
@@ -88,6 +92,10 @@ export type HarnessAdapter = {
   ): void;
   /** Seed provider task state from a restored session's persisted panels. */
   restoreTaskLists?(threadId: string, lists: TaskListMeta[]): void;
+  /** Rebuild a conversation started outside MonoCode so it can be imported. */
+  importExternalSession?(
+    input: ExternalSessionImportInput,
+  ): Promise<ExternalSessionImport>;
   /** Refresh the model catalog overlay when supported. */
   refreshCatalog?(): Promise<void>;
   /** Optional LLM tab title for the first turn. */
