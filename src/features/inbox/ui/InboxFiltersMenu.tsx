@@ -289,6 +289,19 @@ export function InboxFiltersMenu({
         </>
       ) : null}
 
+      <SectionLabel>View</SectionLabel>
+      <FilterItem
+        label={
+          source === "linear"
+            ? "Group by team"
+            : source === "jira"
+              ? "Group by project"
+              : "Group by repository"
+        }
+        checked={filters.grouped}
+        onClick={() => onChange({ ...filters, grouped: !filters.grouped })}
+      />
+
       {hasActiveInboxFilters(
         filters,
         source,
@@ -302,7 +315,7 @@ export function InboxFiltersMenu({
             role="menuitem"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => {
-              onChange(DEFAULT_INBOX_FILTERS);
+              onChange({ ...DEFAULT_INBOX_FILTERS, grouped: filters.grouped });
               if (teamsActive) onLinearTeamsChange([]);
               if (jiraProjectsActive) onJiraProjectsChange([]);
             }}
