@@ -349,6 +349,8 @@ pub fn run() {
             fs::git_github_work_item,
             github_inbox::git_github_inbox_items,
             github_inbox::git_github_inbox_probe,
+            github_inbox::github_inbox_cache_load,
+            github_inbox::github_inbox_cache_save,
             fs::git_github_work_item_details,
             fs::git_github_work_item_thread,
             fs::git_github_work_item_comment,

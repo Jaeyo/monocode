@@ -68,6 +68,8 @@ import {
   inboxItemKey,
   inboxItemRef,
   inboxItemStatus,
+  inboxListCacheKey,
+  inboxListFetchedAt,
   inboxListIsFresh,
   inboxProjectsForRail,
   listInboxItems,
@@ -551,6 +553,9 @@ export function InboxView({
   );
   const [jiraProjects, setJiraProjects] = useState<JiraProject[]>([]);
   const prevRefresh = useRef(refresh);
+  /** Cache key, minus hidden projects, of the list currently on screen. */
+  const shownKeyRef = useRef<string | null>(null);
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null);
 
   const projects = useMemo(
     () => inboxProjectsForRail(recents, cwd),
@@ -785,10 +790,19 @@ export function InboxView({
   useEffect(() => {
     const force = refresh !== prevRefresh.current;
     prevRefresh.current = refresh;
+    // Hiding or showing a project only narrows or widens the fetch. The list
+    // on screen is already filtered for it, so keep it up while that settles.
+    const shownKey = inboxListCacheKey(projects, {
+      ...fetchQuery,
+      hiddenProjects: [],
+    });
+    const sameList = shownKeyRef.current === shownKey;
     const cached = peekInboxList(projects, fetchQuery);
     if (cached) {
+      shownKeyRef.current = shownKey;
       setItems(cached.items);
       setProviderErrors(cached.errors);
+      setFetchedAt(inboxListFetchedAt(projects, fetchQuery));
       setLoading(false);
     }
     if (!force && cached && inboxListIsFresh(projects, fetchQuery)) {
@@ -796,7 +810,7 @@ export function InboxView({
     }
 
     let cancelled = false;
-    if (cached) setRevalidating(true);
+    if (cached || sameList) setRevalidating(true);
     else {
       setLoading(true);
       setProviderErrors({});
@@ -804,8 +818,10 @@ export function InboxView({
     void listInboxItems(projects, fetchQuery, { force })
       .then((next) => {
         if (cancelled) return;
+        shownKeyRef.current = shownKey;
         setItems(next.items);
         setProviderErrors(next.errors);
+        setFetchedAt(inboxListFetchedAt(projects, fetchQuery));
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -1326,6 +1342,11 @@ export function InboxView({
           <button
             type="button"
             aria-label="Refresh"
+            title={
+              fetchedAt == null
+                ? "Refresh"
+                : `Refresh · updated ${formatRelativeTime(new Date(fetchedAt).toISOString())}`
+            }
             onClick={() => setRefresh((value) => value + 1)}
             className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
           >

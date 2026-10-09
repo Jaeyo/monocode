@@ -59,10 +59,10 @@ describe("GitHub fork repositories", () => {
       "acme/web",
     ]);
 
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith("git_github_repositories", {
-      cwd: "/tmp/web",
-    });
+    const discoveries = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "git_github_repositories");
+    expect(discoveries).toEqual([["git_github_repositories", { cwd: "/tmp/web" }]]);
   });
 
   it("fetches a shared parent once and keeps the preferred local checkout", async () => {
@@ -187,7 +187,10 @@ describe("GitHub fork repositories", () => {
     const query = { assignedToMe: false, state: "open", search: "" } as const;
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "git_github_repositories") return ["acme/web"];
-      if (command === "git_github_inbox_items") {
+      if (
+        command === "git_github_inbox_items" ||
+        command === "git_github_inbox_probe"
+      ) {
         if (limited)
           throw new Error("GraphQL: API rate limit already exceeded");
         return batch([

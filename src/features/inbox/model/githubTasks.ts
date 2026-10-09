@@ -40,6 +40,13 @@ import {
   type RecentProject,
 } from "../../projects/model/recents";
 import { recordInboxSelfActivity } from "./inboxSelfActivity";
+import {
+  clearGithubInboxSnapshots,
+  discoveredRepositories,
+  loadGithubInboxSnapshots,
+  refreshGithubRepos,
+  rememberDiscovery,
+} from "./githubInboxSnapshots";
 import { isGithubDotcom } from "./githubHost";
 
 export type GithubTaskKind = "issue" | "pr";
@@ -237,6 +244,7 @@ export function clearInboxCache() {
   prDiffInflight.clear();
   clearGitlabCache();
   clearAzureDevOpsCache();
+  clearGithubInboxSnapshots();
 }
 
 export function inboxListCacheKey(
@@ -284,6 +292,15 @@ export function inboxListIsFresh(
   );
 }
 
+/** When the cached list for this query arrived, or null when there is none. */
+export function inboxListFetchedAt(
+  projects: readonly { path: string }[],
+  query: InboxQuery,
+): number | null {
+  const key = inboxListCacheKey(projects, query);
+  return inboxListCache?.key === key ? inboxListCache.fetchedAt : null;
+}
+
 export function githubStatus(): Promise<GithubStatus> {
   return invoke<GithubStatus>("git_github_status");
 }
@@ -313,12 +330,16 @@ export async function githubRepositories(cwd: string): Promise<string[]> {
   const key = normalizeProjectPath(cwd);
   const cached = repositoriesByPath.get(key);
   if (cached) return cached;
-  const repositories = await invoke<string[]>("git_github_repositories", {
-    cwd,
-  });
+  await loadGithubInboxSnapshots();
+  const generation = inboxCacheGeneration;
+  const repositories =
+    discoveredRepositories(cwd) ??
+    (await invoke<string[]>("git_github_repositories", { cwd }));
   if (repositories.length === 0) {
     throw new Error("GitHub did not return a repository");
   }
+  if (generation !== inboxCacheGeneration) return repositories;
+  rememberDiscovery(cwd, repositories);
   repositoriesByPath.set(key, repositories);
   repoByPath.set(key, repositories[0]!);
   return repositories;
@@ -345,6 +366,13 @@ export type GithubInboxBatch = {
   viewer: string;
   rateLimit: GithubRateLimit | null;
 };
+
+/** Each repository's newest activity, in one cheap query for all of them. */
+export function probeGithubInboxRepos(
+  repos: readonly string[],
+): Promise<GithubInboxBatch> {
+  return invoke<GithubInboxBatch>("git_github_inbox_probe", { repos });
+}
 
 /** Issues and pull requests for many repositories in a few GraphQL requests. */
 export function listGithubInboxItems(
@@ -811,8 +839,10 @@ async function fetchInboxItems(
   const discoveryFailures = discovery.filter(
     (result): result is PromiseRejectedResult => result.status === "rejected",
   );
-  const github = collectInboxResults(
-    [...(await githubInboxResults(grouped, query)), ...discoveryFailures],
+  const github = await fetchGithubInboxItems(
+    grouped,
+    query,
+    discoveryFailures,
     preferredPaths,
   );
   const errors: InboxProviderErrors = {};
@@ -875,39 +905,50 @@ async function fetchInboxItems(
   };
 }
 
-/** One settled result per repository, so a failed one cannot hide the rest. */
-async function githubInboxResults(
+/**
+ * GitHub items for the grouped repositories. Each repository settles on its
+ * own, so one failure cannot hide the rest; when GitHub cannot be reached the
+ * last snapshots stay visible beside the error.
+ */
+async function fetchGithubInboxItems(
   projects: readonly { path: string; repo: string }[],
   query: InboxQuery,
-): Promise<PromiseSettledResult<InboxItem[]>[]> {
-  if (projects.length === 0) return [];
-  let batch: GithubInboxBatch;
-  try {
-    batch = await listGithubInboxItems(
-      projects.map((project) => project.repo),
-      query,
-    );
-  } catch (error) {
-    return [{ status: "rejected", reason: error }];
+  discoveryFailures: readonly PromiseRejectedResult[],
+  preferredPaths: readonly string[],
+): Promise<{ items: InboxItem[]; error?: string }> {
+  if (projects.length === 0) {
+    return collectInboxResults([...discoveryFailures], preferredPaths);
   }
+  const refreshed = await refreshGithubRepos(
+    projects.map((project) => project.repo),
+    query,
+    { list: listGithubInboxItems, probe: probeGithubInboxRepos },
+  );
   const pathByRepo = new Map(
     projects.map((project) => [project.repo.toLowerCase(), project.path]),
   );
-  return batch.repos.map((entry) => {
-    if (entry.error) {
-      return { status: "rejected", reason: new Error(entry.error) };
-    }
-    const projectPath = pathByRepo.get(entry.repo.toLowerCase()) ?? "";
-    return {
-      status: "fulfilled",
-      value: entry.items.map((item) => ({
-        ...item,
-        projectPath,
-        provider: "github" as const,
-        repo: item.repo || entry.repo,
-      })),
-    };
-  });
+  const settled = refreshed.repos.map(
+    (entry): PromiseSettledResult<InboxItem[]> => {
+      if (entry.error) {
+        return { status: "rejected", reason: new Error(entry.error) };
+      }
+      const projectPath = pathByRepo.get(entry.repo.toLowerCase()) ?? "";
+      return {
+        status: "fulfilled",
+        value: entry.items.map((item) => ({
+          ...item,
+          projectPath,
+          provider: "github" as const,
+          repo: item.repo || entry.repo,
+        })),
+      };
+    },
+  );
+  const github = collectInboxResults(
+    [...settled, ...discoveryFailures],
+    preferredPaths,
+  );
+  return refreshed.error ? { ...github, error: refreshed.error } : github;
 }
 
 async function fetchRepositoryInboxItems(

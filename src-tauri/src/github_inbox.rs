@@ -3,8 +3,12 @@
 //! repository, which is what tripped GitHub's secondary rate limit.
 
 use std::collections::HashMap;
+use std::fs;
+use std::io::ErrorKind;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager};
 
 use crate::fs::{
     gh_graphql, github_avatar_url, split_github_repo, GitHubAssignee, GitHubLabel, GitHubWorkItem,
@@ -74,6 +78,45 @@ pub async fn git_github_inbox_probe(repos: Vec<String>) -> Result<GitHubInboxBat
     tauri::async_runtime::spawn_blocking(move || inbox_probe(&repos, gh_graphql))
         .await
         .map_err(|e| e.to_string())?
+}
+
+const CACHE_FILE: &str = "github-inbox-cache.json";
+
+fn cache_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join(CACHE_FILE))
+}
+
+/// The Inbox's last GitHub snapshot, so a restart revalidates it instead of
+/// listing every repository again. The frontend owns the format.
+#[tauri::command]
+pub async fn github_inbox_cache_load(app: AppHandle) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || match fs::read_to_string(cache_path(&app)?) {
+        Ok(raw) => Ok(Some(raw)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn github_inbox_cache_save(app: AppHandle, contents: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = cache_path(&app)?;
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+        }
+        // Write then rename, so a crash mid-write cannot leave a torn file.
+        let staging = path.with_extension("json.tmp");
+        fs::write(&staging, contents).map_err(|error| error.to_string())?;
+        fs::rename(&staging, &path).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 type Runner = fn(&[&str]) -> Result<String, String>;

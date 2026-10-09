@@ -51,7 +51,16 @@ describe.each([
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "git_github_repositories") return ["github/repo"];
       if (command === "git_github_inbox_items") {
-        return { repos: [], viewer: "", rateLimit: null };
+        const { repos } = args as { repos: string[] };
+        return {
+          repos: repos.map((repo) => ({
+            repo,
+            items: [],
+            latestUpdatedAt: "",
+          })),
+          viewer: "",
+          rateLimit: null,
+        };
       }
       if (command === `${commandPrefix}_status`) return { connected };
       if (
