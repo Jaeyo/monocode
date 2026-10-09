@@ -119,8 +119,8 @@ import {
 import {
   inboxGroupId,
   inboxListRows,
-  loadInboxCollapsedGroups,
-  saveInboxCollapsedGroups,
+  loadInboxExpandedGroups,
+  saveInboxExpandedGroups,
   type InboxGroup,
 } from "../model/inboxGroups";
 import {
@@ -536,8 +536,8 @@ export function InboxView({
   );
   const [targetItem, setTargetItem] = useState<InboxItem | null>(null);
   const [filters, setFilters] = useState(loadInboxFilters);
-  const [collapsedGroups, setCollapsedGroups] = useState(
-    loadInboxCollapsedGroups,
+  const [expandedGroups, setExpandedGroups] = useState(
+    loadInboxExpandedGroups,
   );
   const [connections, setConnections] = useState(loadInboxConnections);
   const [tab, setTab] = useState(() =>
@@ -1001,7 +1001,7 @@ export function InboxView({
       inboxListRows(visibleItems, {
         // Featured keeps its hand-made order, so it never groups.
         grouped: !featuredTab && activeFilters.grouped,
-        collapsed: collapsedGroups,
+        expanded: expandedGroups,
         // A search must never hide its matches inside a collapsed group.
         expandAll: searchNarrowed,
         isUnseen: (item) =>
@@ -1012,7 +1012,7 @@ export function InboxView({
       }),
     [
       activeFilters.grouped,
-      collapsedGroups,
+      expandedGroups,
       featuredTab,
       inboxSeenTick,
       searchNarrowed,
@@ -1067,11 +1067,11 @@ export function InboxView({
   };
 
   const toggleGroup = (id: string) => {
-    setCollapsedGroups((current) => {
+    setExpandedGroups((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      saveInboxCollapsedGroups(next);
+      saveInboxExpandedGroups(next);
       return next;
     });
   };
@@ -1088,11 +1088,11 @@ export function InboxView({
     if (!targetSelectionKey || !targetListItem) return;
     if (revealedTargetRef.current === targetSelectionKey) return;
     const groupId = inboxGroupId(targetListItem);
-    if (collapsedGroups.has(groupId)) {
-      const next = new Set(collapsedGroups);
-      next.delete(groupId);
-      saveInboxCollapsedGroups(next);
-      setCollapsedGroups(next);
+    if (!expandedGroups.has(groupId)) {
+      const next = new Set(expandedGroups);
+      next.add(groupId);
+      saveInboxExpandedGroups(next);
+      setExpandedGroups(next);
       return;
     }
     if (targetRowIndex < 0) return;
@@ -1100,7 +1100,7 @@ export function InboxView({
     listScrollRef.current
       ?.querySelector(`[data-inbox-key="${CSS.escape(targetSelectionKey)}"]`)
       ?.scrollIntoView({ block: "nearest" });
-  }, [collapsedGroups, targetListItem, targetRowIndex, targetSelectionKey]);
+  }, [expandedGroups, targetListItem, targetRowIndex, targetSelectionKey]);
 
   useEffect(() => {
     setListLimit(LIST_PAGE_SIZE);
