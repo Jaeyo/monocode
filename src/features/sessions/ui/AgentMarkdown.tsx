@@ -43,7 +43,7 @@ import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { openPathWithDefaultApp, revealPath } from "../../../platform/tauri/fs";
-import { INBOX_MEDIA_PREFIXES, isInboxMediaUrl } from "../../inbox/model/inboxMedia";
+import { isInboxMediaUrl, remoteImageUrl } from "../../inbox/model/inboxMedia";
 import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { InboxMedia } from "../../inbox/ui/InboxMedia";
@@ -81,29 +81,9 @@ const MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   ],
 ];
 
-const INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
-  defaultRehypePlugins.raw,
-  defaultRehypePlugins.sanitize,
-  [
-    harden,
-    {
-      defaultOrigin: "https://inbox.invalid",
-      allowedImagePrefixes: INBOX_MEDIA_PREFIXES,
-      allowedLinkPrefixes: ["*"],
-      allowDataImages: true,
-      imageBlockPolicy: "remove" as const,
-    },
-  ],
-];
-
 // A reply that streams renders its words as spans that fade in as they land.
 const FADING_MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   ...MARKDOWN_REHYPE_PLUGINS,
-  rehypeWordFade,
-];
-
-const FADING_INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
-  ...INBOX_MEDIA_REHYPE_PLUGINS,
   rehypeWordFade,
 ];
 
@@ -473,8 +453,9 @@ function MarkdownImage({
   if (isNoteImagePath(url)) {
     return <NoteAssetImage {...props} asset={url} alt={alt} />;
   }
-  if (!allowRemoteMedia || !url || !isInboxMediaUrl(url)) return null;
-  return <InboxMedia src={url} alt={alt} />;
+  const remote = allowRemoteMedia ? remoteImageUrl(url) : null;
+  if (!remote) return null;
+  return <InboxMedia src={remote} alt={alt} />;
 }
 
 const MARKDOWN_COMPONENTS = {
@@ -552,12 +533,8 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   // the fade is over they come off, or a finished reply would keep a span per
   // word for as long as this transcript stays mounted.
   const baseRehypePlugins = fading
-    ? remoteMedia
-      ? FADING_INBOX_MEDIA_REHYPE_PLUGINS
-      : FADING_MARKDOWN_REHYPE_PLUGINS
-    : remoteMedia
-      ? INBOX_MEDIA_REHYPE_PLUGINS
-      : MARKDOWN_REHYPE_PLUGINS;
+    ? FADING_MARKDOWN_REHYPE_PLUGINS
+    : MARKDOWN_REHYPE_PLUGINS;
   // Hard breaks go last, so nothing after them undoes them, and after the word
   // fade, whose word spans would otherwise hide the newlines from them.
   const rehypePlugins = useMemo(

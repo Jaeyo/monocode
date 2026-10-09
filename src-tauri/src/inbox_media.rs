@@ -18,7 +18,8 @@ struct MediaUrl {
 }
 
 /// Fetch an issue/PR image or video through the host, as a blob the webview
-/// can render without opening `img-src` / `media-src` to GitHub's CDNs.
+/// can render without opening `img-src` / `media-src` to remote hosts. Any
+/// public HTTPS host is fetched; only GitHub attachments get a token.
 #[tauri::command]
 pub async fn fetch_inbox_media(url: String) -> Result<tauri::ipc::Response, String> {
     let bytes = tauri::async_runtime::spawn_blocking(move || fetch_inbox_media_sync(&url))
@@ -28,27 +29,25 @@ pub async fn fetch_inbox_media(url: String) -> Result<tauri::ipc::Response, Stri
 }
 
 fn fetch_inbox_media_sync(url: &str) -> Result<Vec<u8>, String> {
-    let mut current = parse_allowed_media_url(url)?;
-    let token = if github_auth_host(&current.host) {
-        github_auth_token()
-    } else {
-        None
-    };
+    let enterprise = enterprise_host();
+    let enterprise = enterprise.as_deref();
+    let mut current = parse_https_url(url)?;
+    // Only a GitHub attachment URL gets a token, from the `gh` login of the
+    // site it is on, and only that host ever sees it.
+    let token_host = github_attachment_host(&current, enterprise).map(str::to_string);
+    let token = token_host.as_deref().and_then(github_auth_token);
     let agent = ureq::AgentBuilder::new()
         .timeout(HTTP_TIMEOUT)
         .redirects(0)
         .build();
 
     for _ in 0..MAX_REDIRECTS {
-        if !is_allowed_media_target(&current) {
-            return Err("That media host is not allowed".into());
-        }
         let mut request = agent
             .get(&current.url)
             .set("Accept", "image/*,video/*,*/*;q=0.1")
             .set("User-Agent", USER_AGENT);
         if let Some(token) = token.as_ref() {
-            if github_auth_host(&current.host) {
+            if github_site_host(&current.host, enterprise) == token_host.as_deref() {
                 request = request.set("Authorization", &format!("Bearer {token}"));
             }
         }
@@ -130,14 +129,6 @@ fn too_large() -> String {
     )
 }
 
-fn parse_allowed_media_url(raw: &str) -> Result<MediaUrl, String> {
-    let parsed = parse_https_url(raw)?;
-    if !is_allowed_media_target(&parsed) {
-        return Err("That media host is not allowed".into());
-    }
-    Ok(parsed)
-}
-
 fn parse_https_url(raw: &str) -> Result<MediaUrl, String> {
     let raw = raw.trim();
     if raw.is_empty() || raw.len() > MAX_URL_BYTES {
@@ -208,11 +199,35 @@ fn redirect_target(base: &str, location: &str) -> Result<MediaUrl, String> {
     parse_https_url(&joined)
 }
 
-fn is_allowed_media_target(url: &MediaUrl) -> bool {
-    if is_github_site(&url.host) {
-        return is_github_attachment_path(&url.path);
+/// The configured GitHub Enterprise host, or `None` on github.com.
+fn enterprise_host() -> Option<String> {
+    let host = crate::github_host::current();
+    (!crate::github_host::is_dotcom(&host)).then_some(host)
+}
+
+/// The site host whose `gh` login owns `url`, when it is a GitHub upload:
+/// `/user-attachments/`, `/<owner>/<repo>/assets/<id>/`, or GHES `/storage/`.
+fn github_attachment_host<'a>(url: &MediaUrl, enterprise: Option<&'a str>) -> Option<&'a str> {
+    let site = github_site_host(&url.host, enterprise)?;
+    let upload = is_github_attachment_path(&url.path)
+        || (Some(site) == enterprise && is_enterprise_storage_path(&url.path));
+    upload.then_some(site)
+}
+
+/// `github.com` or the Enterprise host when `host` is that site (with or
+/// without `www.`), so the caller knows which `gh` login it belongs to.
+fn github_site_host<'a>(host: &str, enterprise: Option<&'a str>) -> Option<&'a str> {
+    if is_github_site(host) {
+        return Some(crate::github_host::DEFAULT_GITHUB_HOST);
     }
-    is_github_media_cdn(&url.host) || is_linear_uploads(&url.host) || is_github_asset_s3(&url.host)
+    let enterprise = enterprise?;
+    let bare = host.strip_prefix("www.").unwrap_or(host);
+    (bare == enterprise).then_some(enterprise)
+}
+
+/// Without subdomain isolation GHES serves the same uploads from `/storage/`.
+fn is_enterprise_storage_path(path: &str) -> bool {
+    path.to_ascii_lowercase().starts_with("/storage/")
 }
 
 fn is_github_attachment_path(path: &str) -> bool {
@@ -229,27 +244,6 @@ fn is_github_site(host: &str) -> bool {
     host == "github.com" || host == "www.github.com"
 }
 
-fn is_github_media_cdn(host: &str) -> bool {
-    host == "githubusercontent.com" || host.ends_with(".githubusercontent.com")
-}
-
-fn is_linear_uploads(host: &str) -> bool {
-    host == "uploads.linear.app" || host.ends_with(".uploads.linear.app")
-}
-
-fn is_github_asset_s3(host: &str) -> bool {
-    let s3 = host.ends_with(".s3.amazonaws.com")
-        || (host.contains(".s3.") && host.ends_with(".amazonaws.com"));
-    s3 && (host.starts_with("github-production-user-asset-")
-        || host.starts_with("github-production-media.")
-        || host.starts_with("github-production-media-"))
-}
-
-fn github_auth_host(host: &str) -> bool {
-    // JWT-signed githubusercontent URLs reject an extra Authorization header.
-    is_github_site(host)
-}
-
 fn is_redirect(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
 }
@@ -261,13 +255,14 @@ fn path_has_dotdot(path: &str) -> bool {
     })
 }
 
-fn github_auth_token() -> Option<String> {
+fn github_auth_token(host: &str) -> Option<String> {
     let program = crate::harness::resolve_gui_binary("gh")?;
     let home = dirs_home()?;
     let mut cmd = Command::new(program);
     cmd.current_dir(&home)
-        // Media hosts are github.com's; never send a GitHub Enterprise token there.
-        .args(["auth", "token", "--hostname", "github.com"])
+        // Only the site host gets a token: JWT-signed githubusercontent URLs
+        // reject an extra Authorization header, and media CDNs need none.
+        .args(["auth", "token", "--hostname", host])
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PAGER", "cat");
     crate::harness::apply_gui_env(&mut cmd);
@@ -288,64 +283,84 @@ fn github_auth_token() -> Option<String> {
 mod tests {
     use super::*;
 
+    const GHES: Option<&str> = Some("oss.example.com");
+
+    fn attachment_host(raw: &str, enterprise: Option<&str>) -> Option<String> {
+        let url = parse_https_url(raw).unwrap();
+        github_attachment_host(&url, enterprise).map(str::to_string)
+    }
+
     #[test]
-    fn github_and_linear_attachments_are_allowed() {
-        assert!(parse_allowed_media_url(
-            "https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        )
-        .is_ok());
-        assert!(
-            parse_allowed_media_url("https://user-images.githubusercontent.com/1/shot.png").is_ok()
+    fn any_public_https_host_parses() {
+        for url in [
+            "https://github.com/user-attachments/assets/aaaaaaaa-bbbb",
+            "https://img.shields.io/badge/ci-passing-green.svg",
+            "https://wiki.example.com/download/attachments/1/image.png?version=1",
+            "https://zenhub.oss.example.com/api/attachedFiles/abc/image.png",
+        ] {
+            assert!(parse_https_url(url).is_ok(), "{url}");
+        }
+    }
+
+    #[test]
+    fn insecure_local_and_traversal_urls_are_rejected() {
+        for url in [
+            "http://github.com/user-attachments/assets/x",
+            "https://github.com/user-attachments/../login",
+            "https://github.com@evil.example/user-attachments/assets/x",
+            "https://127.0.0.1/shot.png",
+            "https://[::1]/shot.png",
+            "https://localhost/shot.png",
+            "https:///shot.png",
+        ] {
+            assert!(parse_https_url(url).is_err(), "{url}");
+        }
+    }
+
+    #[test]
+    fn only_github_uploads_get_a_token() {
+        assert_eq!(
+            attachment_host("https://github.com/user-attachments/assets/x", None).as_deref(),
+            Some("github.com")
         );
-        assert!(parse_allowed_media_url("https://uploads.linear.app/org/uuid/file.png").is_ok());
-        assert!(parse_allowed_media_url(
-            "https://github-production-user-asset-6210df.s3.amazonaws.com/1/shot.png"
-        )
-        .is_ok());
-        assert!(parse_allowed_media_url(
-            "https://github.com/acme/web/assets/12/aaaaaaaa-bbbb-cccc"
-        )
-        .is_ok());
+        assert_eq!(
+            attachment_host("https://github.com/acme/web/assets/12/aaaa", GHES).as_deref(),
+            Some("github.com")
+        );
+        assert_eq!(
+            attachment_host("https://oss.example.com/user-attachments/assets/x", GHES).as_deref(),
+            Some("oss.example.com")
+        );
+        assert_eq!(
+            attachment_host("https://www.oss.example.com/storage/user/1/files/x", GHES).as_deref(),
+            Some("oss.example.com")
+        );
+        for (url, enterprise) in [
+            ("https://oss.example.com/user-attachments/assets/x", None),
+            ("https://github.com/acme/web/issues/1", None),
+            ("https://github.com/storage/user/1/files/x", GHES),
+            ("https://media.oss.example.com/user/1/files/x", GHES),
+            ("https://evil.example/user-attachments/assets/x", GHES),
+        ] {
+            assert_eq!(attachment_host(url, enterprise), None, "{url}");
+        }
     }
 
     #[test]
-    fn github_pages_other_hosts_and_traversal_are_rejected() {
-        assert!(parse_allowed_media_url("https://github.com/acme/web/issues/1").is_err());
-        assert!(parse_allowed_media_url("https://github.com/acme/web/assets").is_err());
-        assert!(parse_allowed_media_url("https://github.com/user-attachments/../login").is_err());
-        assert!(parse_allowed_media_url("http://github.com/user-attachments/assets/x").is_err());
-        assert!(parse_allowed_media_url("https://evil.example/shot.png").is_err());
-        assert!(parse_allowed_media_url(
-            "https://github.com@evil.example/user-attachments/assets/x"
-        )
-        .is_err());
-        assert!(parse_allowed_media_url("https://127.0.0.1/shot.png").is_err());
-    }
-
-    #[test]
-    fn redirects_stay_on_allowed_hosts() {
+    fn redirects_resolve_and_stay_on_https() {
         let next = redirect_target(
             "https://github.com/user-attachments/assets/abcd",
             "https://objects.githubusercontent.com/github-production-user-asset/1",
         )
         .unwrap();
         assert_eq!(next.host, "objects.githubusercontent.com");
-        assert!(redirect_target(
-            "https://github.com/user-attachments/assets/abcd",
-            "https://evil.example/shot.png"
-        )
-        .is_ok());
-        assert!(!is_allowed_media_target(
-            &redirect_target(
-                "https://github.com/user-attachments/assets/abcd",
-                "https://evil.example/shot.png"
-            )
-            .unwrap()
-        ));
+        let relative = redirect_target("https://cdn.example.com/a/b.png", "c.png").unwrap();
+        assert_eq!(relative.url, "https://cdn.example.com/a/c.png");
         assert!(redirect_target(
             "https://github.com/user-attachments/assets/abcd",
             "http://objects.githubusercontent.com/x"
         )
         .is_err());
+        assert!(redirect_target("https://cdn.example.com/a.png", "https://127.0.0.1/x").is_err());
     }
 }

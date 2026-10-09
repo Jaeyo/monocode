@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  INBOX_MEDIA_PREFIXES,
   isInboxMediaUrl,
+  remoteImageUrl,
   sniffInboxMedia,
 } from "./inboxMedia";
 
@@ -38,16 +38,66 @@ describe("isInboxMediaUrl", () => {
   });
 });
 
-describe("INBOX_MEDIA_PREFIXES", () => {
-  it("stays on HTTPS attachment hosts", () => {
+describe("isInboxMediaUrl on GitHub Enterprise", () => {
+  const host = "oss.example.com";
+
+  it("allows the configured host's attachments and media subdomain", () => {
+    for (const url of [
+      "https://oss.example.com/user-attachments/assets/aaaaaaaa-bbbb",
+      "https://oss.example.com/acme/web/assets/12/aaaaaaaa-bbbb",
+      "https://oss.example.com/storage/user/12/files/aaaaaaaa-bbbb",
+      "https://media.oss.example.com/user/12/files/aaaaaaaa-bbbb",
+    ]) {
+      expect(isInboxMediaUrl(url, host)).toBe(true);
+      expect(isInboxMediaUrl(url, "github.com")).toBe(false);
+    }
     expect(
-      INBOX_MEDIA_PREFIXES.every((prefix) => prefix.startsWith("https://")),
+      isInboxMediaUrl("https://github.com/user-attachments/assets/x", host),
     ).toBe(true);
+  });
+
+  it("rejects the host's pages and lookalike hosts", () => {
     expect(
-      INBOX_MEDIA_PREFIXES.some((prefix) =>
-        prefix.startsWith("https://github.com/user-attachments/"),
+      isInboxMediaUrl("https://oss.example.com/acme/web/issues/1", host),
+    ).toBe(false);
+    expect(
+      isInboxMediaUrl("https://github.com/storage/user/1/files/x", host),
+    ).toBe(false);
+    expect(
+      isInboxMediaUrl("https://x.media.oss.example.com/user/1/files/x", host),
+    ).toBe(false);
+    expect(
+      isInboxMediaUrl(
+        "https://oss.example.com.evil.com/user-attachments/x",
+        host,
       ),
-    ).toBe(true);
+    ).toBe(false);
+  });
+});
+
+describe("remoteImageUrl", () => {
+  it("allows images on any HTTPS host", () => {
+    expect(remoteImageUrl("https://img.shields.io/badge/ci-passing.svg")).toBe(
+      "https://img.shields.io/badge/ci-passing.svg",
+    );
+    expect(
+      remoteImageUrl(" https://wiki.example.com/download/a/image.png?v=1 "),
+    ).toBe("https://wiki.example.com/download/a/image.png?v=1");
+  });
+
+  it("rejects insecure, local, credentialed and relative URLs", () => {
+    for (const url of [
+      "http://example.com/a.png",
+      "https://user:pw@example.com/a.png",
+      "https://localhost/a.png",
+      "https://127.0.0.1/a.png",
+      "https://0x7f.1/a.png",
+      "https://[::1]/a.png",
+      "/relative/a.png",
+      "data:image/png;base64,AAAA",
+    ]) {
+      expect(remoteImageUrl(url)).toBeNull();
+    }
   });
 });
 
@@ -58,6 +108,16 @@ describe("sniffInboxMedia", () => {
         new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
       ),
     ).toEqual({ kind: "image", mime: "image/png" });
+    expect(
+      sniffInboxMedia(
+        new TextEncoder().encode(
+          '\uFEFF<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+        ),
+      ),
+    ).toEqual({ kind: "image", mime: "image/svg+xml" });
+    expect(
+      sniffInboxMedia(new TextEncoder().encode("<!doctype html><html></html>")),
+    ).toBeNull();
     expect(
       sniffInboxMedia(
         new Uint8Array([

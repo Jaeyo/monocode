@@ -1,24 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { sniffImageMime } from "../../files/model/filePreview";
-
-/**
- * Prefixes rehype-harden will keep on issue/PR markdown. The fetcher still
- * re-checks the host; this list only has to match the URLs GitHub and Linear
- * put in the markdown source, not the CDN they redirect to.
- */
-export const INBOX_MEDIA_PREFIXES = [
-  "https://github.com/user-attachments/",
-  "https://www.github.com/user-attachments/",
-  "https://user-images.githubusercontent.com/",
-  "https://private-user-images.githubusercontent.com/",
-  "https://objects.githubusercontent.com/",
-  "https://media.githubusercontent.com/",
-  "https://camo.githubusercontent.com/",
-  "https://avatars.githubusercontent.com/",
-  "https://raw.githubusercontent.com/",
-  "https://gist.githubusercontent.com/",
-  "https://uploads.linear.app/",
-];
+import { getGithubHost, isGithubDotcom } from "./githubHost";
 
 export type InboxMediaKind = "image" | "video";
 export type InboxMediaType = { kind: InboxMediaKind; mime: string };
@@ -30,8 +12,36 @@ const mediaCache = new Map<string, Uint8Array>();
 const mediaRequests = new Map<string, Promise<Uint8Array>>();
 let mediaCacheBytes = 0;
 
-/** Remote image/video URLs GitHub and Linear actually put in issue bodies. */
-export function isInboxMediaUrl(value: string): boolean {
+/**
+ * The normalized URL of a remote image an issue/PR body may show: any HTTPS
+ * host, fetched through the backend, except credentials, IP literals and
+ * localhost. Normalizing first turns `https://0x7f.1/` into `127.0.0.1`, so the
+ * backend sees the address the URL really names.
+ */
+export function remoteImageUrl(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:") return null;
+  if (url.username || url.password) return null;
+  if (pathHasDotDot(url.pathname)) return null;
+  const host = url.hostname.replace(/\.$/, "").toLowerCase();
+  if (!host || host === "localhost" || host.startsWith("[")) return null;
+  if (/^[0-9.]+$/.test(host)) return null;
+  return url.href;
+}
+
+/**
+ * Upload URLs GitHub and Linear put in issue bodies. Unlike any image, a bare
+ * link to one of these is embedded too, since that is how videos appear.
+ */
+export function isInboxMediaUrl(
+  value: string,
+  githubHost = getGithubHost(),
+): boolean {
   let url: URL;
   try {
     url = new URL(value.trim());
@@ -51,9 +61,15 @@ export function isInboxMediaUrl(value: string): boolean {
   ) {
     return true;
   }
-  if (host !== "github.com" && host !== "www.github.com") return false;
+  const enterprise = isGithubDotcom(githubHost) ? null : githubHost;
+  if (enterprise && host === `media.${enterprise}`) return true;
+  const bare = host.startsWith("www.") ? host.slice(4) : host;
+  if (bare !== "github.com" && bare !== enterprise) return false;
   const path = url.pathname.toLowerCase();
   if (path.startsWith("/user-attachments/")) return true;
+  if (enterprise && bare === enterprise && path.startsWith("/storage/")) {
+    return true;
+  }
   const parts = path.split("/").filter(Boolean);
   return (
     parts.length >= 4 &&
@@ -65,7 +81,18 @@ export function isInboxMediaUrl(value: string): boolean {
 export function sniffInboxMedia(bytes: Uint8Array): InboxMediaType | null {
   const mime = sniffImageMime(bytes);
   if (mime) return { kind: "image", mime };
+  if (isSvg(bytes)) return { kind: "image", mime: "image/svg+xml" };
   return sniffVideoType(bytes);
+}
+
+// Badges and diagrams in READMEs are often SVG. Shown through <img>, an SVG
+// runs no script, so a markup lead that opens an <svg> root is enough.
+function isSvg(bytes: Uint8Array): boolean {
+  const head = new TextDecoder()
+    .decode(bytes.subarray(0, 1024))
+    .replace(/^\uFEFF/, "")
+    .trimStart();
+  return head.startsWith("<") && /<svg[\s>]/i.test(head);
 }
 
 export function fetchInboxMedia(url: string): Promise<Uint8Array> {
