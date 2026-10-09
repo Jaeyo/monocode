@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -4277,6 +4277,45 @@ fn parse_github_rate_limit_backoff(json: &str) -> Result<Option<SystemTime>, Str
         .ok_or_else(|| "Invalid GitHub rate-limit reset".into())
 }
 
+/// Caps concurrent `gh` processes. Bursts of parallel GitHub requests trip the
+/// secondary rate limit even when the hourly quota is far from exhausted.
+struct GhPermits {
+    available: Mutex<usize>,
+    released: Condvar,
+}
+
+struct GhPermit<'a>(&'a GhPermits);
+
+impl GhPermits {
+    const fn new(limit: usize) -> Self {
+        Self {
+            available: Mutex::new(limit),
+            released: Condvar::new(),
+        }
+    }
+
+    fn acquire(&self) -> GhPermit<'_> {
+        let mut available = self.available.lock().unwrap_or_else(|e| e.into_inner());
+        while *available == 0 {
+            available = self
+                .released
+                .wait(available)
+                .unwrap_or_else(|e| e.into_inner());
+        }
+        *available -= 1;
+        GhPermit(self)
+    }
+}
+
+impl Drop for GhPermit<'_> {
+    fn drop(&mut self) {
+        *self.0.available.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        self.0.released.notify_one();
+    }
+}
+
+static GH_PERMITS: GhPermits = GhPermits::new(4);
+
 fn gh_run_raw(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
     let program = crate::harness::resolve_gui_binary("gh")
         .ok_or_else(|| "GitHub CLI (`gh`) is not installed.".to_string())?;
@@ -4290,7 +4329,10 @@ fn gh_run_raw(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, S
         .env("GIT_PAGER", "cat");
     crate::harness::apply_gui_env(&mut cmd);
     crate::hide_window_console(&mut cmd);
-    let output = cmd.output().map_err(|error| {
+    let permit = GH_PERMITS.acquire();
+    let output = cmd.output();
+    drop(permit);
+    let output = output.map_err(|error| {
         if error.kind() == ErrorKind::NotFound {
             "GitHub CLI (`gh`) is not installed.".to_string()
         } else {
@@ -6068,6 +6110,30 @@ mod tests {
         .is_err());
         assert_eq!(calls, 1);
         assert!(backoff.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn gh_permits_cap_concurrent_processes() {
+        let permits = Arc::new(GhPermits::new(2));
+        let running = Arc::new(AtomicU64::new(0));
+        let peak = Arc::new(AtomicU64::new(0));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let (permits, running, peak) = (permits.clone(), running.clone(), peak.clone());
+                std::thread::spawn(move || {
+                    let _permit = permits.acquire();
+                    let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(10));
+                    running.fetch_sub(1, Ordering::SeqCst);
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+        assert_eq!(*permits.available.lock().unwrap(), 2);
     }
 
     #[test]
