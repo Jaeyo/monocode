@@ -25,6 +25,8 @@ export type InboxFilters = {
   hiddenKinds: InboxKind[];
   time: InboxTimeFilter;
   status: InboxStatusFilter;
+  /** View option, not a filter: groups the list by repository, project or team. */
+  grouped: boolean;
 };
 
 /**
@@ -52,6 +54,7 @@ export const DEFAULT_INBOX_FILTERS: InboxFilters = {
   hiddenKinds: [],
   time: "all",
   status: DEFAULT_INBOX_STATUS_FILTER,
+  grouped: true,
 };
 
 export type InboxSource = InboxProvider;
@@ -205,6 +208,7 @@ export function loadInboxFilters(): InboxFilters {
         closed: parsed.status?.closed === true,
         merged: parsed.status?.merged === true,
       },
+      grouped: parsed.grouped !== false,
     };
   } catch {
     return DEFAULT_INBOX_FILTERS;

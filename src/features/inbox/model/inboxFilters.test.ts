@@ -15,6 +15,8 @@ import {
   pruneInboxFilters,
   connectableInboxSources,
   loadInboxConnections,
+  loadInboxFilters,
+  saveInboxFilters,
   resolveInboxSource,
   saveInboxConnections,
   visibleInboxSources,
@@ -390,6 +392,12 @@ describe("hasActiveInboxFilters", () => {
     expect(hasActiveInboxFilters(DEFAULT_INBOX_FILTERS)).toBe(false);
   });
 
+  it("ignores the grouping view option", () => {
+    expect(
+      hasActiveInboxFilters({ ...DEFAULT_INBOX_FILTERS, grouped: false }),
+    ).toBe(false);
+  });
+
   it("is true when a project is hidden", () => {
     expect(
       hasActiveInboxFilters({
@@ -711,5 +719,26 @@ describe("inbox connection cache", () => {
       gitlab: null,
       azuredevops: null,
     });
+  });
+});
+
+describe("inbox filter storage", () => {
+  beforeEach(mockLocalStorage);
+
+  it("groups by default, including filters saved before grouping existed", () => {
+    expect(loadInboxFilters().grouped).toBe(true);
+    localStorage.setItem(
+      "monocode.inboxFilters",
+      JSON.stringify({ assignedToMe: true }),
+    );
+    expect(loadInboxFilters()).toMatchObject({
+      assignedToMe: true,
+      grouped: true,
+    });
+  });
+
+  it("remembers turning grouping off", () => {
+    saveInboxFilters({ ...DEFAULT_INBOX_FILTERS, grouped: false });
+    expect(loadInboxFilters().grouped).toBe(false);
   });
 });

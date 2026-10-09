@@ -7,6 +7,7 @@ import {
   CheckCheck,
   CheckCircle,
   ChevronDown,
+  ChevronRight,
   CircleDot,
   CircleX,
   Copy,
@@ -100,6 +101,13 @@ import {
   type InboxFilters,
   type InboxSource,
 } from "../model/inboxFilters";
+import {
+  inboxGroupId,
+  inboxListRows,
+  loadInboxCollapsedGroups,
+  saveInboxCollapsedGroups,
+  type InboxGroup,
+} from "../model/inboxGroups";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
@@ -446,6 +454,9 @@ export function InboxView({
   );
   const [targetItem, setTargetItem] = useState<InboxItem | null>(null);
   const [filters, setFilters] = useState(loadInboxFilters);
+  const [collapsedGroups, setCollapsedGroups] = useState(
+    loadInboxCollapsedGroups,
+  );
   const [connections, setConnections] = useState(loadInboxConnections);
   const [source, setSource] = useState(() =>
     resolveInboxSource(loadInboxSource(), connections),
@@ -810,13 +821,38 @@ export function InboxView({
   const narrowedByUser = searchNarrowed || filtersActive;
   const sourceError = providerErrors[source] ?? null;
 
+  const listRows = useMemo(
+    () =>
+      inboxListRows(visibleItems, {
+        grouped: activeFilters.grouped,
+        collapsed: collapsedGroups,
+        // A search must never hide its matches inside a collapsed group.
+        expandAll: searchNarrowed,
+        isUnseen: (item) =>
+          isInboxEntryUnseen({
+            key: inboxItemKey(item),
+            updatedAt: item.updatedAt,
+          }),
+      }),
+    [
+      activeFilters.grouped,
+      collapsedGroups,
+      inboxSeenTick,
+      searchNarrowed,
+      visibleItems,
+    ],
+  );
+  const showsGroups = listRows.some((row) => row.type === "group");
+
   const selectedByKey = visibleItems.find(
     (item) => inboxItemKey(item) === selectedKey,
   );
   const waitingForTarget =
     !!targetSelectionKey && selectedKey === targetSelectionKey;
+  const firstListedItem =
+    listRows.find((row) => row.type === "item")?.item ?? null;
   const selected =
-    selectedByKey ?? (waitingForTarget ? null : visibleItems[0]) ?? null;
+    selectedByKey ?? (waitingForTarget ? null : firstListedItem) ?? null;
   const updateInboxItem = useCallback((next: InboxItem) => {
     const key = inboxItemKey(next);
     setItems((current) =>
@@ -826,9 +862,68 @@ export function InboxView({
       current && inboxItemKey(current) === key ? next : current,
     );
   }, []);
-  const shownItemCount = listWindowSize(visibleItems.length, listLimit);
-  const shownItems = visibleItems.slice(0, shownItemCount);
-  const hasMoreItems = shownItemCount < visibleItems.length;
+  const targetRowIndex = targetSelectionKey
+    ? listRows.findIndex(
+        (row) => row.type === "item" && row.key === targetSelectionKey,
+      )
+    : -1;
+  const shownRowCount = listWindowSize(
+    listRows.length,
+    listLimit,
+    targetRowIndex,
+  );
+  const shownRows = listRows.slice(0, shownRowCount);
+  const hasMoreItems = shownRowCount < listRows.length;
+
+  const projectVisuals = (path: string) => {
+    const projectId = projectKey(path);
+    return {
+      logoPath: resolveTabGroupLogo(projectId, logos),
+      mascotName: resolveTabGroupMascot(projectId, groupMascots),
+      mascotColor: resolveTabGroupColor(
+        projectId,
+        groupColors,
+        groupCustomColors,
+        projectName(path),
+      ),
+    };
+  };
+
+  const toggleGroup = (id: string) => {
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      saveInboxCollapsedGroups(next);
+      return next;
+    });
+  };
+
+  // A linked work item opens its group once and comes into view; the user can
+  // still collapse it again afterwards.
+  const revealedTargetRef = useRef<string | null>(null);
+  const targetListItem = targetSelectionKey
+    ? (visibleItems.find(
+        (item) => inboxItemKey(item) === targetSelectionKey,
+      ) ?? null)
+    : null;
+  useEffect(() => {
+    if (!targetSelectionKey || !targetListItem) return;
+    if (revealedTargetRef.current === targetSelectionKey) return;
+    const groupId = inboxGroupId(targetListItem);
+    if (collapsedGroups.has(groupId)) {
+      const next = new Set(collapsedGroups);
+      next.delete(groupId);
+      saveInboxCollapsedGroups(next);
+      setCollapsedGroups(next);
+      return;
+    }
+    if (targetRowIndex < 0) return;
+    revealedTargetRef.current = targetSelectionKey;
+    listScrollRef.current
+      ?.querySelector(`[data-inbox-key="${CSS.escape(targetSelectionKey)}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [collapsedGroups, targetListItem, targetRowIndex, targetSelectionKey]);
 
   useEffect(() => {
     setListLimit(LIST_PAGE_SIZE);
@@ -856,7 +951,7 @@ export function InboxView({
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasMoreItems, shownItemCount]);
+  }, [hasMoreItems, shownRowCount]);
 
   useEffect(() => {
     if (!selected) {
@@ -1054,26 +1149,31 @@ export function InboxView({
           </p>
         ) : (
           <ul className="flex flex-col gap-0.5 p-1.5">
-            {shownItems.map((item) => {
-              const key = inboxItemKey(item);
-              const projectId = projectKey(item.projectPath);
+            {shownRows.map((row) => {
+              if (row.type === "group") {
+                return (
+                  <InboxGroupHeader
+                    key={`group:${row.group.id}`}
+                    group={row.group}
+                    collapsed={row.collapsed}
+                    unseen={row.unseen}
+                    {...projectVisuals(row.group.items[0]?.projectPath ?? "")}
+                    onToggle={() => toggleGroup(row.group.id)}
+                  />
+                );
+              }
+              const { item, key } = row;
               const relatedSessions = relatedSessionsForInboxItem(
                 item,
                 sessions,
               );
               return (
-                <li key={key}>
+                <li key={key} data-inbox-key={key}>
                   <InboxCard
                     item={item}
+                    hideSource={showsGroups}
                     active={selected != null && key === inboxItemKey(selected)}
-                    logoPath={resolveTabGroupLogo(projectId, logos)}
-                    mascotName={resolveTabGroupMascot(projectId, groupMascots)}
-                    mascotColor={resolveTabGroupColor(
-                      projectId,
-                      groupColors,
-                      groupCustomColors,
-                      projectName(item.projectPath),
-                    )}
+                    {...projectVisuals(item.projectPath)}
                     relatedSessionCount={relatedSessions.length}
                     onSelect={() => {
                       markInboxItemSeen({
@@ -1497,8 +1597,97 @@ export function inboxStatusMark(item: InboxItem): InboxStatusMark {
   };
 }
 
+function InboxProjectIcon({
+  projectPath,
+  logoPath,
+  mascotName,
+  mascotColor,
+}: {
+  projectPath: string;
+  logoPath: string | null;
+  mascotName: string | null;
+  mascotColor: string;
+}) {
+  return logoPath ? (
+    <ProjectLogoIcon
+      path={logoPath}
+      className="size-3.5 shrink-0 rounded-sm"
+      imageClassName="size-3.5"
+    />
+  ) : (
+    <ProjectMascot
+      project={projectName(projectPath)}
+      color={mascotColor}
+      name={mascotName}
+      className="size-3 shrink-0"
+    />
+  );
+}
+
+function InboxGroupHeader({
+  group,
+  collapsed,
+  unseen,
+  logoPath,
+  mascotName,
+  mascotColor,
+  onToggle,
+}: {
+  group: InboxGroup;
+  collapsed: boolean;
+  unseen: number;
+  logoPath: string | null;
+  mascotName: string | null;
+  mascotColor: string;
+  onToggle: () => void;
+}) {
+  const Chevron = collapsed ? ChevronRight : ChevronDown;
+  const projectPath = group.items[0]?.projectPath ?? "";
+  const tracker = group.provider === "linear" || group.provider === "jira";
+  return (
+    <li className="sticky top-0 z-10 bg-background-base">
+      <button
+        type="button"
+        title={group.label}
+        aria-expanded={!collapsed}
+        aria-label={`${group.label}, ${group.items.length} ${group.items.length === 1 ? "item" : "items"}${unseen > 0 ? `, ${unseen} new` : ""}`}
+        onClick={onToggle}
+        className="flex h-7 w-full items-center gap-1.5 rounded-md px-1.5 text-left text-[11px] text-content/55 hover:bg-content/5 hover:text-content"
+      >
+        <Chevron className="size-3 shrink-0" strokeWidth={1.75} />
+        {tracker || !projectPath ? (
+          <InboxProviderMark
+            provider={group.provider}
+            className="size-3.5 shrink-0"
+          />
+        ) : (
+          <InboxProjectIcon
+            projectPath={projectPath}
+            logoPath={logoPath}
+            mascotName={mascotName}
+            mascotColor={mascotColor}
+          />
+        )}
+        <span className="min-w-0 flex-1 truncate font-semibold">
+          {group.label}
+        </span>
+        <span className="shrink-0 tabular-nums text-content/40">
+          {group.items.length}
+        </span>
+        {unseen > 0 ? (
+          <span className="flex shrink-0 items-center gap-1 tabular-nums text-accent">
+            <span aria-hidden className="size-1.5 rounded-full bg-accent" />
+            {unseen}
+          </span>
+        ) : null}
+      </button>
+    </li>
+  );
+}
+
 function InboxCard({
   item,
+  hideSource = false,
   active,
   logoPath,
   mascotName,
@@ -1507,6 +1696,8 @@ function InboxCard({
   onSelect,
 }: {
   item: InboxItem;
+  /** Inside a group header the repository or team would only repeat. */
+  hideSource?: boolean;
   active: boolean;
   logoPath: string | null;
   mascotName: string | null;
@@ -1590,32 +1781,30 @@ function InboxCard({
       <span className="mt-1 line-clamp-1 text-[13px] font-semibold leading-snug text-content">
         {item.title}
       </span>
-      <span className="mt-1 flex min-w-0 items-center gap-2">
-        <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[11px] text-content/45">
-          {tracker || !item.projectPath ? null : logoPath ? (
-            <ProjectLogoIcon
-              path={logoPath}
-              className="size-3.5 shrink-0 rounded-sm"
-              imageClassName="size-3.5"
-            />
-          ) : (
-            <ProjectMascot
-              project={name}
-              color={mascotColor}
-              name={mascotName}
-              className="size-3 shrink-0"
-            />
+      {hideSource && item.labels.length === 0 ? null : (
+        <span className="mt-1 flex min-w-0 items-center gap-2">
+          {hideSource ? null : (
+            <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[11px] text-content/45">
+              {tracker || !item.projectPath ? null : (
+                <InboxProjectIcon
+                  projectPath={item.projectPath}
+                  logoPath={logoPath}
+                  mascotName={mascotName}
+                  mascotColor={mascotColor}
+                />
+              )}
+              <span className="min-w-0 truncate">{source}</span>
+            </span>
           )}
-          <span className="min-w-0 truncate">{source}</span>
+          {item.labels.length > 0 ? (
+            <span className="flex min-w-0 shrink-0 items-center gap-1">
+              {item.labels.slice(0, 2).map((label) => (
+                <InboxLabel key={label.name} label={label} compact />
+              ))}
+            </span>
+          ) : null}
         </span>
-        {item.labels.length > 0 ? (
-          <span className="flex min-w-0 shrink-0 items-center gap-1">
-            {item.labels.slice(0, 2).map((label) => (
-              <InboxLabel key={label.name} label={label} compact />
-            ))}
-          </span>
-        ) : null}
-      </span>
+      )}
     </button>
   );
 }
