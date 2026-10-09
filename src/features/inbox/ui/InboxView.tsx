@@ -48,7 +48,7 @@ import {
 import { useSortable } from "../../../shared/hooks/useSortable";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
-import { Popover } from "../../../shared/ui/Popover";
+import { Popover, type PopoverAnchor } from "../../../shared/ui/Popover";
 import { IconButton, OverlayNav } from "../../../app/shell/TitleBar";
 import { WindowControls } from "../../../app/shell/WindowControls";
 import { useDragResize } from "../../../shared/hooks/useDragResize";
@@ -57,6 +57,7 @@ import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
 import {
   githubStatus,
   githubPrDiff,
+  githubIssueAction,
   githubPrAction,
   githubReviewDecisionLabel,
   githubWorkItem,
@@ -78,6 +79,7 @@ import {
   formatRelativeTime,
   inboxPersonAvatarUrl,
   filterInboxItems,
+  type GithubIssueAction,
   type GithubLabel,
   type GithubPrAction,
   type GithubPrDiff,
@@ -524,6 +526,12 @@ export function InboxView({
     y: number;
     key: string;
   } | null>(null);
+  const [issueConfirm, setIssueConfirm] = useState<{
+    item: InboxItem;
+    action: GithubIssueAction;
+    x: number;
+    y: number;
+  } | null>(null);
   const [clearedFeatured, setClearedFeatured] = useState<{
     previous: string[];
     keys: string[];
@@ -605,6 +613,8 @@ export function InboxView({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // The confirm popover owns Escape while it is open.
+      if (issueConfirm) return;
       event.preventDefault();
       event.stopPropagation();
       if (filterMenu) {
@@ -623,7 +633,7 @@ export function InboxView({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [connectMenuOpen, filterMenu, itemMenu]);
+  }, [connectMenuOpen, filterMenu, issueConfirm, itemMenu]);
 
   useEffect(() => {
     const onChange = () => {
@@ -1148,16 +1158,48 @@ export function InboxView({
   };
 
   const itemMenuFeatured = itemMenu ? featuredKeySet.has(itemMenu.key) : false;
+  const itemMenuItem = itemMenu
+    ? visibleItems.find((entry) => inboxItemKey(entry) === itemMenu.key)
+    : undefined;
+  const itemMenuIssueAction = itemMenuItem
+    ? githubIssueActionFor(itemMenuItem)
+    : null;
   const itemMenuItems: ExplorerMenuItem[] = [
     {
       kind: "item",
       id: "feature",
       label: itemMenuFeatured ? "Unfeature" : "Feature",
     },
+    ...(itemMenuIssueAction
+      ? ([
+          { kind: "sep" },
+          {
+            kind: "item",
+            id: itemMenuIssueAction,
+            label:
+              itemMenuIssueAction === "close" ? "Close issue" : "Reopen issue",
+            danger: itemMenuIssueAction === "close",
+          },
+        ] satisfies ExplorerMenuItem[])
+      : []),
   ];
   const onItemMenuPick = (id: string) => {
     const key = itemMenu?.key;
     setItemMenu(null);
+    if (
+      itemMenu &&
+      itemMenuItem &&
+      itemMenuIssueAction &&
+      id === itemMenuIssueAction
+    ) {
+      setIssueConfirm({
+        item: itemMenuItem,
+        action: itemMenuIssueAction,
+        x: itemMenu.x,
+        y: itemMenu.y,
+      });
+      return;
+    }
     if (id !== "feature" || !key) return;
     const saved = saveInboxFeatured(
       featuredKeySet.has(key)
@@ -1571,6 +1613,15 @@ export function InboxView({
           ariaLabel="Inbox item actions"
           onPick={onItemMenuPick}
           onClose={() => setItemMenu(null)}
+        />
+      ) : null}
+      {issueConfirm ? (
+        <GithubIssueActionConfirm
+          item={issueConfirm.item}
+          action={issueConfirm.action}
+          anchor={{ x: issueConfirm.x, y: issueConfirm.y }}
+          onChange={updateInboxItem}
+          onClose={() => setIssueConfirm(null)}
         />
       ) : null}
     </div>
@@ -2142,7 +2193,7 @@ function githubPrActionCopy(
   action: GithubPrAction,
   baseRef: string,
   headRef: string,
-): { title: string; detail: string; confirm: string; progress: string } {
+): GithubActionCopy {
   const source = headRef ? `“${headRef}”` : "this branch";
   const destination = baseRef ? `“${baseRef}”` : "the base branch";
   switch (action) {
@@ -2410,66 +2461,233 @@ export function GithubPrActions({
         </Popover>
       ) : null}
       {confirmation && confirmCopy ? (
-        <Popover
+        <GithubActionConfirm
           anchor={confirmation.anchor}
-          gap={5}
-          width={320}
-          autoFocus
-          onDismiss={busy ? undefined : dismissConfirmation}
-          role="dialog"
-          tabIndex={-1}
-          aria-label={confirmCopy.title}
-          className="p-3"
+          copy={confirmCopy}
+          tone={
+            confirmation.action === "close"
+              ? "danger"
+              : confirmation.action === "merge" ||
+                  confirmation.action === "squash" ||
+                  confirmation.action === "rebase"
+                ? "success"
+                : "neutral"
+          }
+          busy={busy}
+          error={actionError}
+          onCancel={dismissConfirmation}
+          onConfirm={() => void runAction()}
+        />
+      ) : null}
+    </>
+  );
+}
+
+type GithubActionCopy = {
+  title: string;
+  detail: string;
+  confirm: string;
+  progress: string;
+};
+
+/** The confirm step every GitHub state change passes through. */
+function GithubActionConfirm({
+  anchor,
+  copy,
+  tone,
+  busy,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  anchor: PopoverAnchor;
+  copy: GithubActionCopy;
+  tone: "danger" | "success" | "neutral";
+  busy: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Popover
+      anchor={anchor}
+      gap={5}
+      width={320}
+      autoFocus
+      onDismiss={busy ? undefined : onCancel}
+      role="dialog"
+      tabIndex={-1}
+      aria-label={copy.title}
+      className="p-3"
+    >
+      <div className="flex flex-col gap-1">
+        <h2 className="text-[13px] font-medium text-content">{copy.title}</h2>
+        <p className="text-[12px] leading-snug text-content/55">
+          {copy.detail}
+        </p>
+      </div>
+      {error ? (
+        <p
+          role="alert"
+          className="mt-2 break-words text-[11px] leading-snug text-rose-400"
         >
-          <div className="flex flex-col gap-1">
-            <h2 className="text-[13px] font-medium text-content">
-              {confirmCopy.title}
-            </h2>
-            <p className="text-[12px] leading-snug text-content/55">
-              {confirmCopy.detail}
-            </p>
-          </div>
-          {actionError ? (
-            <p
-              role="alert"
-              className="mt-2 break-words text-[11px] leading-snug text-rose-400"
-            >
-              {actionError}
-            </p>
+          {error}
+        </p>
+      ) : null}
+      <div className="mt-3 flex justify-end gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onCancel}
+          className={`h-7 rounded-md px-3 text-[12px] text-content/65 hover:bg-content/8 hover:text-content disabled:cursor-default disabled:opacity-40 ${PR_ACTION_PRESS}`}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onConfirm}
+          className={`inline-flex h-7 items-center gap-1.5 rounded-md px-3 text-[12px] font-medium disabled:cursor-default disabled:opacity-60 ${
+            tone === "danger"
+              ? "bg-rose-500/20 text-rose-700 hover:bg-rose-500/30 dark:text-rose-300"
+              : tone === "success"
+                ? "bg-emerald-500/20 text-emerald-700 hover:bg-emerald-500/30 dark:text-emerald-300"
+                : "bg-content text-background-base hover:bg-content/80"
+          } ${PR_ACTION_PRESS}`}
+        >
+          {busy ? (
+            <LoaderCircle
+              className="size-3.5 animate-spin"
+              strokeWidth={1.75}
+            />
           ) : null}
-          <div className="mt-3 flex justify-end gap-2">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={dismissConfirmation}
-              className={`h-7 rounded-md px-3 text-[12px] text-content/65 hover:bg-content/8 hover:text-content disabled:cursor-default disabled:opacity-40 ${PR_ACTION_PRESS}`}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void runAction()}
-              className={`inline-flex h-7 items-center gap-1.5 rounded-md px-3 text-[12px] font-medium disabled:cursor-default disabled:opacity-60 ${
-                confirmation.action === "close"
-                  ? "bg-rose-500/20 text-rose-700 hover:bg-rose-500/30 dark:text-rose-300"
-                  : confirmation.action === "merge" ||
-                      confirmation.action === "squash" ||
-                      confirmation.action === "rebase"
-                    ? "bg-emerald-500/20 text-emerald-700 hover:bg-emerald-500/30 dark:text-emerald-300"
-                    : "bg-content text-background-base hover:bg-content/80"
-              } ${PR_ACTION_PRESS}`}
-            >
-              {busy ? (
-                <LoaderCircle
-                  className="size-3.5 animate-spin"
-                  strokeWidth={1.75}
-                />
-              ) : null}
-              {busy ? confirmCopy.progress : confirmCopy.confirm}
-            </button>
-          </div>
-        </Popover>
+          {busy ? copy.progress : copy.confirm}
+        </button>
+      </div>
+    </Popover>
+  );
+}
+
+const GITHUB_ISSUE_ACTION_COPY: Record<GithubIssueAction, GithubActionCopy> = {
+  close: {
+    title: "Close this issue?",
+    detail: "The issue will close as completed. You can reopen it later.",
+    confirm: "Close issue",
+    progress: "Closing…",
+  },
+  reopen: {
+    title: "Reopen this issue?",
+    detail: "The issue will return to the open state.",
+    confirm: "Reopen issue",
+    progress: "Reopening…",
+  },
+};
+
+/** Close for an open GitHub issue, reopen for a closed one, else nothing. */
+export function githubIssueActionFor(
+  item: InboxItem,
+): GithubIssueAction | null {
+  if (item.provider !== "github" || item.kind !== "issue") return null;
+  const state = item.state.trim().toLowerCase();
+  if (state === "open") return "close";
+  if (state === "closed") return "reopen";
+  return null;
+}
+
+/** Confirms, then runs, a close or reopen on one GitHub issue. */
+export function GithubIssueActionConfirm({
+  item,
+  action,
+  anchor,
+  onChange,
+  onClose,
+}: {
+  item: InboxItem;
+  action: GithubIssueAction;
+  anchor: PopoverAnchor;
+  onChange?: (item: InboxItem) => void;
+  onClose: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await githubIssueAction(
+        item.projectPath,
+        item.repo,
+        item.number,
+        action,
+      );
+      onClose();
+      onChange?.({
+        ...item,
+        ...next,
+        projectPath: item.projectPath,
+        provider: "github",
+      });
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <GithubActionConfirm
+      anchor={anchor}
+      copy={GITHUB_ISSUE_ACTION_COPY[action]}
+      tone={action === "close" ? "danger" : "neutral"}
+      busy={busy}
+      error={error}
+      onCancel={onClose}
+      onConfirm={() => void run()}
+    />
+  );
+}
+
+export function GithubIssueActions({
+  item,
+  onChange,
+}: {
+  item: InboxItem;
+  onChange?: (item: InboxItem) => void;
+}) {
+  const [confirmation, setConfirmation] = useState<{
+    action: GithubIssueAction;
+    anchor: HTMLElement;
+  } | null>(null);
+  const action = githubIssueActionFor(item);
+  if (!action) return null;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={(event) =>
+          setConfirmation({ action, anchor: event.currentTarget })
+        }
+        className={`${ACTION_OUTLINE} ${PR_ACTION_PRESS} ${
+          action === "close" ? "hover:text-rose-400" : ""
+        }`}
+      >
+        {action === "close" ? (
+          <CheckCircle className="size-3.5" strokeWidth={1.75} />
+        ) : (
+          <CircleDot className="size-3.5" strokeWidth={1.75} />
+        )}
+        {action === "close" ? "Close issue" : "Reopen issue"}
+      </button>
+      {confirmation ? (
+        <GithubIssueActionConfirm
+          item={item}
+          action={confirmation.action}
+          anchor={confirmation.anchor}
+          onChange={onChange}
+          onClose={() => setConfirmation(null)}
+        />
       ) : null}
     </>
   );
@@ -3325,6 +3543,9 @@ export function InboxDetail({
                     headRef={headRef}
                     onChange={onItemChange}
                   />
+                ) : null}
+                {githubKind === "issue" ? (
+                  <GithubIssueActions item={item} onChange={onItemChange} />
                 ) : null}
                 {onDiscuss ? (
                   <button
