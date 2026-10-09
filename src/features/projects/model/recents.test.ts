@@ -151,6 +151,12 @@ describe("forgetProject", () => {
     expect(loadPinnedProjects()).toEqual([]);
   });
 
+  it("keeps every opened project instead of dropping the oldest", () => {
+    for (let i = 0; i < 30; i++) rememberProject(`/work/p${i}`);
+    expect(loadRecents()).toHaveLength(30);
+    expect(projectRailItems(loadRecents(), "")).toHaveLength(30);
+  });
+
   it("treats differently-cased Windows paths as one project", () => {
     rememberProject("C:/Users/me/Code/App");
     rememberProject("c:/users/ME/code/app");
