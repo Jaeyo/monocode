@@ -134,9 +134,11 @@ impl CheckpointStore {
         let mut status =
             diff_from_manifest(&scope.dir, &scope.root, &scope.manifest, &foreign_touched);
         if scope.external {
+            let root = path_to_js(&scope.root);
             for file in &mut status.files {
                 file.relative = scope.key(&file.relative);
                 file.path = file.relative.clone();
+                file.root = Some(root.clone());
             }
         }
         status
@@ -574,6 +576,9 @@ pub struct CheckpointFile {
     /// so its net line ownership cannot be reconstructed exactly.
     pub exact: bool,
     pub undoable: bool,
+    /// The external repository holding this file; absent for project files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1088,6 +1093,7 @@ fn describe_change(
             deletions,
             exact,
             undoable,
+            root: None,
         };
     }
     if let Some(file) = git {
@@ -1099,6 +1105,7 @@ fn describe_change(
             deletions: file.deletions,
             exact,
             undoable,
+            root: None,
         };
     }
     let abs = root.join(relative);
@@ -1111,6 +1118,7 @@ fn describe_change(
         deletions: 0,
         exact,
         undoable,
+        root: None,
     }
 }
 
@@ -2453,6 +2461,10 @@ mod tests {
         assert_eq!(relatives(&status), vec![a.as_str(), made.as_str()]);
         assert!(status.files.iter().all(|file| file.path == file.relative));
         assert!(status.files.iter().all(|file| file.undoable));
+        assert!(status
+            .files
+            .iter()
+            .all(|file| file.root.as_deref() == Some(key(&module.0).as_str())));
         assert_eq!(store.roots("s1"), vec![key(&module.0)]);
 
         let diff = store.file_diff("s1", &cwd, &a).unwrap();

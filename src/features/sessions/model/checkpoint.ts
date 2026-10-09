@@ -10,6 +10,8 @@ export type CheckpointFile = {
   exact: boolean;
   /** False when restoring could overwrite a change made outside this session. */
   undoable: boolean;
+  /** External Git repository holding the file; `relative` is then absolute. */
+  root?: string;
 };
 
 export type CheckpointStatus = {
@@ -208,4 +210,29 @@ export function keepSessionChanges(
       relative: relative ?? null,
     }),
   );
+}
+
+/** External repositories the session edited, in first-edit order. */
+export function sessionCheckpointRoots(sessionId: string): Promise<string[]> {
+  return enqueueCheckpoint(sessionId, () =>
+    invoke<string[]>("session_checkpoint_roots", { sessionId }),
+  );
+}
+
+/** Hide one external repository until the session edits it again. */
+export async function removeSessionCheckpointRoot(
+  sessionId: string,
+  root: string,
+): Promise<void> {
+  await enqueueCheckpoint(sessionId, () =>
+    invoke<void>("session_checkpoint_remove_root", { sessionId, root }),
+  );
+  notifyReviewChanged(sessionId);
+}
+
+/** Review label: project files stay relative, external ones lead with their repo. */
+export function checkpointFileLabel(file: CheckpointFile): string {
+  if (!file.root) return file.relative;
+  const name = file.root.split("/").filter(Boolean).pop() ?? file.root;
+  return `${name}${file.relative.slice(file.root.length)}`;
 }

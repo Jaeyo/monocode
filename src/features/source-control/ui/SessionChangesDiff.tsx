@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Loader } from "../../../shared/ui/icons";
 import {
+  checkpointFileLabel,
   sessionCheckpointFileDiff,
   sessionCheckpointStatus,
   subscribeReviewChanged,
@@ -127,7 +128,7 @@ export function SessionChangesDiff({
       return {
         id: file.relative,
         path: file.path,
-        label: file.relative,
+        label: checkpointFileLabel(file),
         binary: loaded?.binary,
         tooLarge: loaded?.tooLarge,
         emptyMessage:

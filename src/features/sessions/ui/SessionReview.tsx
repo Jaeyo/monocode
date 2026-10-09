@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronRight, FileDiff } from "../../../shared/ui/icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  checkpointFileLabel,
   keepSessionChanges,
   sessionCheckpointStatus,
   subscribeReviewChanged,
@@ -257,7 +258,7 @@ function FileRow({
     >
       <FileTypeIcon name={name} isDir={false} size={15} />
       <span className="min-w-0 flex-1 truncate font-mono text-[12px]">
-        {file.relative}
+        {checkpointFileLabel(file)}
       </span>
       <DiffCounts file={file} />
     </button>
