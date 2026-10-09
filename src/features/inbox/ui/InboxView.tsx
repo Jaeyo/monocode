@@ -2023,7 +2023,7 @@ function InboxCard({
       onClick={onSelect}
       onPointerDown={onPointerDown}
       onContextMenu={onContextMenu}
-      className={`flex w-full flex-col rounded-md border px-2.5 py-2 text-left ${
+      className={`flex w-full select-none flex-col rounded-md border px-2.5 py-2 text-left ${
         active
           ? "border-transparent bg-selection text-content"
           : "border-transparent text-content/80 hover:bg-content/5 hover:text-content"
