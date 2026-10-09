@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { mergeOrderedSubset } from "../../../shared/lib/reorder";
-import { inboxItemKey, type InboxItem, type InboxProvider } from "./githubTasks";
+import {
+  inboxItemKey,
+  type InboxItem,
+  type InboxProvider,
+} from "./githubTasks";
 
 const KEY = "monocode.inboxFeatured";
 
@@ -50,7 +54,10 @@ export function useInboxFeatured(): string[] {
 }
 
 /** A re-feature lands on top again; the old slot is not remembered. */
-export function featureInboxKey(keys: readonly string[], key: string): string[] {
+export function featureInboxKey(
+  keys: readonly string[],
+  key: string,
+): string[] {
   return [key, ...keys.filter((entry) => entry !== key)];
 }
 
@@ -60,6 +67,24 @@ export function unfeatureInboxKeys(
 ): string[] {
   const drop = new Set(removed);
   return keys.filter((key) => !drop.has(key));
+}
+
+/**
+ * Undo for a bulk removal: put `restored` back in their `previous` slots
+ * while keeping edits made since (new features on top, later unfeatures).
+ */
+export function restoreFeaturedKeys(
+  current: readonly string[],
+  previous: readonly string[],
+  restored: Iterable<string>,
+): string[] {
+  const back = new Set(restored);
+  const kept = new Set(current);
+  const known = new Set(previous);
+  return [
+    ...current.filter((key) => !known.has(key)),
+    ...previous.filter((key) => kept.has(key) || back.has(key)),
+  ];
 }
 
 /**

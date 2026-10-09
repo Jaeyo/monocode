@@ -6,6 +6,7 @@ import {
   loadInboxFeatured,
   missingFeaturedKeys,
   reorderFeaturedKeys,
+  restoreFeaturedKeys,
   saveInboxFeatured,
   subscribeInboxFeatured,
   unfeatureInboxKeys,
@@ -30,7 +31,9 @@ function mockLocalStorage() {
   });
 }
 
-function item(overrides: Partial<InboxItem> & Pick<InboxItem, "number">): InboxItem {
+function item(
+  overrides: Partial<InboxItem> & Pick<InboxItem, "number">,
+): InboxItem {
   return {
     kind: "issue",
     title: "Item",
@@ -97,6 +100,19 @@ describe("featured key edits", () => {
     expect(unfeatureInboxKeys(["a", "b", "c"], ["a", "c"])).toEqual(["b"]);
   });
 
+  it("restores bulk-removed keys in place, keeping later edits", () => {
+    const previous = ["a", "x", "b", "y", "c"];
+    // x and y were cleared; then "n" was featured and "b" unfeatured.
+    const current = ["n", "a", "c"];
+    expect(restoreFeaturedKeys(current, previous, ["x", "y"])).toEqual([
+      "n",
+      "a",
+      "x",
+      "y",
+      "c",
+    ]);
+  });
+
   it("reorders only the shown subset and keeps hidden slots", () => {
     // "h" is not in the current list; the shown keys swap around it.
     expect(reorderFeaturedKeys(["a", "h", "b", "c"], ["c", "a", "b"])).toEqual([
@@ -128,10 +144,9 @@ describe("missingFeaturedKeys", () => {
       "jira:10099",
       "linear:eng-1",
     ];
-    expect(missingFeaturedKeys(keys, [gh1], new Set(["github", "jira"]))).toEqual([
-      "github:acme/web:issue:9",
-      "jira:10099",
-    ]);
+    expect(
+      missingFeaturedKeys(keys, [gh1], new Set(["github", "jira"])),
+    ).toEqual(["github:acme/web:issue:9", "jira:10099"]);
     expect(missingFeaturedKeys(keys, [gh1], new Set(["github"]))).toEqual([
       "github:acme/web:issue:9",
     ]);
