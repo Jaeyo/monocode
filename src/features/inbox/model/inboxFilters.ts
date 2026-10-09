@@ -6,7 +6,10 @@ import {
   type InboxProvider,
 } from "./githubTasks";
 import { normalizeProjectPath } from "../../projects/model/recents";
-import { timeFilterStart, type SessionTimeFilter } from "../../sessions/model/sessionFilters";
+import {
+  timeFilterStart,
+  type SessionTimeFilter,
+} from "../../sessions/model/sessionFilters";
 
 export type InboxTimeFilter = SessionTimeFilter;
 
@@ -61,6 +64,9 @@ export type InboxSource = InboxProvider;
 
 export type ConnectableInboxSource = InboxSource;
 
+/** The Inbox list tabs: one per provider plus the cross-provider Featured list. */
+export type InboxTab = InboxSource | "featured";
+
 /** `null` means the status check has not resolved yet. */
 export type InboxSourceConnections = Record<
   ConnectableInboxSource,
@@ -105,10 +111,13 @@ export function isTrackerSource(source?: InboxSource): boolean {
 }
 
 export function resolveInboxSource(
-  source: InboxSource,
+  source: InboxTab,
   connections: InboxSourceConnections,
-): InboxSource {
+): InboxTab {
   const visible = visibleInboxSources(connections);
+  if (source === "featured") {
+    return visible.length > 0 ? source : "github";
+  }
   return visible.includes(source) ? source : (visible[0] ?? "github");
 }
 
@@ -124,10 +133,11 @@ const UNKNOWN_CONNECTIONS: InboxSourceConnections = {
   azuredevops: null,
 };
 
-export function loadInboxSource(): InboxSource {
+export function loadInboxSource(): InboxTab {
   try {
     const raw = localStorage.getItem(SOURCE_KEY);
-    return raw === "linear" ||
+    return raw === "featured" ||
+      raw === "linear" ||
       raw === "jira" ||
       raw === "gitlab" ||
       raw === "azuredevops"
@@ -138,7 +148,7 @@ export function loadInboxSource(): InboxSource {
   }
 }
 
-export function saveInboxSource(source: InboxSource) {
+export function saveInboxSource(source: InboxTab) {
   try {
     localStorage.setItem(SOURCE_KEY, source);
   } catch {
