@@ -378,6 +378,17 @@ export async function forgetHarnessSession(
   await adapter.forgetSession(sessionId);
 }
 
+/** Rebuild a provider conversation started outside MonoCode. */
+export async function importHarnessSession(
+  harness: HarnessId,
+  input: ExternalSessionImportInput,
+): Promise<ExternalSessionImport> {
+  const adapter = getHarness(harness);
+  if (!adapter?.importExternalSession)
+    throw new Error("Sessions from this provider cannot be imported.");
+  return adapter.importExternalSession(input);
+}
+
 export function bindHarnessSession(
   harness: HarnessId,
   threadId: string,

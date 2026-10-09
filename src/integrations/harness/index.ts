@@ -185,6 +185,7 @@ export {
   stopHarnessSession,
   forgetHarnessSession,
   bindHarnessSession,
+  importHarnessSession,
   refreshHarnessCatalogs,
   generateHarnessTitle,
   generateHarnessCommitMessage,
