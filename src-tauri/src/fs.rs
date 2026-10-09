@@ -1497,6 +1497,21 @@ pub async fn git_github_pr_action(
     .map_err(|e| e.to_string())?
 }
 
+/// Close or reopen a GitHub issue via `gh`.
+#[tauri::command]
+pub async fn git_github_issue_action(
+    cwd: String,
+    repo: String,
+    number: i64,
+    action: String,
+) -> Result<GitHubWorkItem, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_github_issue_action_for(&expand_home(&cwd), &repo, number, &action)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHubPrFile {
@@ -2856,6 +2871,35 @@ fn git_github_pr_action_for(
     // status confirms the action ran; the follow-up view fetches the new state.
     gh_run(root, &refs, true)?;
     git_github_work_item_for(root, repo, "pr", number)
+}
+
+fn github_issue_action_args(repo: &str, number: i64, action: &str) -> Result<Vec<String>, String> {
+    if number <= 0 {
+        return Err("GitHub issue number must be positive".into());
+    }
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
+    let number = number.to_string();
+    // No `--reason`: GitHub closes as completed by default, and omitting it
+    // keeps older GHES servers without state reasons working.
+    let args = match action.trim() {
+        "close" => vec!["issue", "close", &number, "--repo", &repo],
+        "reopen" => vec!["issue", "reopen", &number, "--repo", &repo],
+        _ => return Err("Unknown GitHub issue action".into()),
+    };
+    Ok(args.into_iter().map(str::to_string).collect())
+}
+
+fn git_github_issue_action_for(
+    root: &Path,
+    repo: &str,
+    number: i64,
+    action: &str,
+) -> Result<GitHubWorkItem, String> {
+    let args = github_issue_action_args(repo, number, action)?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    gh_run(root, &refs, true)?;
+    git_github_work_item_for(root, repo, "issue", number)
 }
 
 fn git_github_work_item_details_for(
@@ -7986,6 +8030,21 @@ mod tests {
         assert!(github_pr_action_args("acme/web", 42, "delete").is_err());
         assert!(github_pr_action_args("acme/web", 0, "merge").is_err());
         assert!(github_pr_action_args("invalid", 42, "merge").is_err());
+    }
+
+    #[test]
+    fn github_issue_actions_map_to_non_interactive_gh_commands() {
+        assert_eq!(
+            github_issue_action_args("acme/web", 7, "close").unwrap(),
+            ["issue", "close", "7", "--repo", "acme/web"]
+        );
+        assert_eq!(
+            github_issue_action_args(" acme/web ", 7, " reopen ").unwrap(),
+            ["issue", "reopen", "7", "--repo", "acme/web"]
+        );
+        assert!(github_issue_action_args("acme/web", 7, "merge").is_err());
+        assert!(github_issue_action_args("acme/web", 0, "close").is_err());
+        assert!(github_issue_action_args("invalid", 7, "close").is_err());
     }
 
     #[test]
