@@ -16,9 +16,11 @@ import {
   connectableInboxSources,
   loadInboxConnections,
   loadInboxFilters,
+  loadInboxSource,
   saveInboxFilters,
   resolveInboxSource,
   saveInboxConnections,
+  saveInboxSource,
   visibleInboxSources,
 } from "./inboxFilters";
 import type { InboxItem } from "./githubTasks";
@@ -625,6 +627,20 @@ describe("resolveInboxSource", () => {
     ).toBe("github");
   });
 
+  it("keeps Featured while any source is visible", () => {
+    const none = {
+      github: false,
+      linear: false,
+      jira: false,
+      gitlab: false,
+      azuredevops: false,
+    };
+    expect(resolveInboxSource("featured", { ...none, jira: true })).toBe(
+      "featured",
+    );
+    expect(resolveInboxSource("featured", none)).toBe("github");
+  });
+
   it("leaves a still-visible selection alone", () => {
     expect(
       resolveInboxSource("linear", {
@@ -740,5 +756,16 @@ describe("inbox filter storage", () => {
   it("remembers turning grouping off", () => {
     saveInboxFilters({ ...DEFAULT_INBOX_FILTERS, grouped: false });
     expect(loadInboxFilters().grouped).toBe(false);
+  });
+});
+
+describe("inbox tab storage", () => {
+  beforeEach(mockLocalStorage);
+
+  it("round-trips the Featured tab and rejects unknown values", () => {
+    saveInboxSource("featured");
+    expect(loadInboxSource()).toBe("featured");
+    localStorage.setItem("monocode.inboxSource", "starred");
+    expect(loadInboxSource()).toBe("github");
   });
 });

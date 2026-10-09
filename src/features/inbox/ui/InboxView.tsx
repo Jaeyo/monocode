@@ -26,6 +26,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Star,
   type IconComponent,
 } from "../../../shared/ui/icons";
 import {
@@ -35,10 +36,16 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { InboxFiltersMenu, INBOX_FILTER_MENU_WIDTH } from "./InboxFiltersMenu";
 import { InboxConnectMenu } from "./InboxConnectMenu";
 import { InboxProviderMark } from "./InboxProviderMark";
+import {
+  ExplorerMenu,
+  type ExplorerMenuItem,
+} from "../../files/ui/ExplorerMenu";
+import { useSortable } from "../../../shared/hooks/useSortable";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { Popover } from "../../../shared/ui/Popover";
@@ -70,6 +77,7 @@ import {
   peekInboxList,
   formatRelativeTime,
   inboxPersonAvatarUrl,
+  filterInboxItems,
   type GithubLabel,
   type GithubPrAction,
   type GithubPrDiff,
@@ -77,6 +85,7 @@ import {
   type GithubWorkItemDetails,
   type GithubWorkItemThread,
   type InboxItem,
+  type InboxProvider,
   type InboxProviderErrors,
   type InboxQuery,
 } from "../model/githubTasks";
@@ -100,6 +109,7 @@ import {
   type ConnectableInboxSource,
   type InboxFilters,
   type InboxSource,
+  type InboxTab,
 } from "../model/inboxFilters";
 import {
   inboxGroupId,
@@ -108,6 +118,16 @@ import {
   saveInboxCollapsedGroups,
   type InboxGroup,
 } from "../model/inboxGroups";
+import {
+  featureInboxKey,
+  featuredInboxItems,
+  missingFeaturedKeys,
+  reorderFeaturedKeys,
+  restoreFeaturedKeys,
+  saveInboxFeatured,
+  unfeatureInboxKeys,
+  useInboxFeatured,
+} from "../model/inboxFeatured";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
@@ -334,6 +354,40 @@ function InboxSourceTab({
   );
 }
 
+function InboxFeaturedTab({
+  selected,
+  unseen,
+  onSelect,
+}: {
+  selected: boolean;
+  unseen: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      aria-label={unseen ? "Featured, new" : "Featured"}
+      title="Featured"
+      onClick={onSelect}
+      className={`relative grid h-6 w-7 shrink-0 place-items-center rounded-md ${
+        selected
+          ? "bg-selection text-content"
+          : "text-content/50 hover:bg-content/5 hover:text-content"
+      }`}
+    >
+      <Star className="size-3.5" strokeWidth={1.75} />
+      {unseen ? (
+        <span
+          aria-hidden
+          className="absolute right-1 top-1 size-1.5 rounded-full bg-accent"
+        />
+      ) : null}
+    </button>
+  );
+}
+
 function InboxDetailTab({
   label,
   count,
@@ -458,9 +512,22 @@ export function InboxView({
     loadInboxCollapsedGroups,
   );
   const [connections, setConnections] = useState(loadInboxConnections);
-  const [source, setSource] = useState(() =>
+  const [tab, setTab] = useState(() =>
     resolveInboxSource(loadInboxSource(), connections),
   );
+  const featuredTab = tab === "featured";
+  /** The provider tab in view; null on the cross-provider Featured tab. */
+  const source: InboxSource | null = featuredTab ? null : tab;
+  const featuredKeys = useInboxFeatured();
+  const [itemMenu, setItemMenu] = useState<{
+    x: number;
+    y: number;
+    key: string;
+  } | null>(null);
+  const [clearedFeatured, setClearedFeatured] = useState<{
+    previous: string[];
+    keys: string[];
+  } | null>(null);
   const [connectMenuOpen, setConnectMenuOpen] = useState(false);
   const connectButtonRef = useRef<HTMLButtonElement | null>(null);
   const [filterMenu, setFilterMenu] = useState<{ x: number; y: number } | null>(
@@ -493,12 +560,15 @@ export function InboxView({
       ),
     [filters, projects],
   );
-  const filtersActive = hasActiveInboxFilters(
-    activeFilters,
-    source,
-    linearHiddenTeamIds,
-    jiraHiddenProjectIds,
-  );
+  // Featured ignores the shared filters: a pinned item must not hide behind them.
+  const filtersActive =
+    source != null &&
+    hasActiveInboxFilters(
+      activeFilters,
+      source,
+      linearHiddenTeamIds,
+      jiraHiddenProjectIds,
+    );
   const fetchState = inboxFetchState(activeFilters);
   const fetchQuery = useMemo<InboxQuery>(
     () => ({
@@ -528,7 +598,7 @@ export function InboxView({
 
   useEffect(() => {
     if (!target) return;
-    setSource("github");
+    setTab("github");
     setSearchInput("");
   }, [target]);
 
@@ -541,6 +611,10 @@ export function InboxView({
         setFilterMenu(null);
         return;
       }
+      if (itemMenu) {
+        setItemMenu(null);
+        return;
+      }
       if (connectMenuOpen) {
         setConnectMenuOpen(false);
         return;
@@ -549,7 +623,7 @@ export function InboxView({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [connectMenuOpen, filterMenu]);
+  }, [connectMenuOpen, filterMenu, itemMenu]);
 
   useEffect(() => {
     const onChange = () => {
@@ -637,7 +711,7 @@ export function InboxView({
   // The initial source is resolved against cached status, so storage can still
   // name a provider this view has already fallen back from.
   useEffect(() => {
-    saveInboxSource(source);
+    saveInboxSource(tab);
     // Mount only: the temporary switch to GitHub for a linked target must not
     // be persisted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -645,15 +719,17 @@ export function InboxView({
 
   // Disconnecting can pull the tab out from under the current selection.
   useEffect(() => {
-    const next = resolveInboxSource(source, connections);
-    if (next === source) return;
-    setSource(next);
+    const next = resolveInboxSource(tab, connections);
+    if (next === tab) return;
+    setTab(next);
     saveInboxSource(next);
-  }, [connections, source]);
+  }, [connections, tab]);
 
   const visibleSources = visibleInboxSources(connections);
   const connectableSources = connectableInboxSources(connections);
-  const sourceAvailable = visibleSources.includes(source);
+  const sourceAvailable = source
+    ? visibleSources.includes(source)
+    : visibleSources.length > 0;
   const noSourcesConnected = visibleSources.length === 0;
 
   // The roster has to come from Linear, not from the fetched issues: hiding a
@@ -765,6 +841,12 @@ export function InboxView({
 
   const visibleItems = useMemo(() => {
     if (!sourceAvailable) return [];
+    if (!source) {
+      return filterInboxItems(
+        featuredInboxItems(items, featuredKeys),
+        searchInput,
+      );
+    }
     const visible = applyInboxFilters(
       items,
       activeFilters,
@@ -782,6 +864,7 @@ export function InboxView({
     return [targeted, ...visible];
   }, [
     activeFilters,
+    featuredKeys,
     items,
     searchInput,
     source,
@@ -800,31 +883,66 @@ export function InboxView({
       })),
     );
   }, [items]);
+  const featuredEntries = useMemo(
+    () =>
+      featuredInboxItems(items, featuredKeys).map((item) => ({
+        key: inboxItemKey(item),
+        updatedAt: item.updatedAt,
+      })),
+    [featuredKeys, items],
+  );
   const sourceEntries = useMemo(
     () =>
-      sourceAvailable
-        ? items
-            .filter((item) => item.provider === source)
-            .map((item) => ({
-              key: inboxItemKey(item),
-              updatedAt: item.updatedAt,
-            }))
-        : [],
-    [items, source, sourceAvailable],
+      !sourceAvailable
+        ? []
+        : !source
+          ? featuredEntries
+          : items
+              .filter((item) => item.provider === source)
+              .map((item) => ({
+                key: inboxItemKey(item),
+                updatedAt: item.updatedAt,
+              })),
+    [featuredEntries, items, source, sourceAvailable],
   );
   const sourceHasUnseen = useMemo(
     () => sourceEntries.some(isInboxEntryUnseen),
     [inboxSeenTick, sourceEntries],
   );
+  const featuredHasUnseen = useMemo(
+    () => featuredEntries.some(isInboxEntryUnseen),
+    [inboxSeenTick, featuredEntries],
+  );
+  const featuredKeySet = useMemo(() => new Set(featuredKeys), [featuredKeys]);
+  // Only a provider whose fetch settled cleanly can say an item is gone.
+  const missingFeatured = useMemo(() => {
+    if (!featuredTab || loading) return [];
+    const settled = new Set<InboxProvider>(
+      visibleSources.filter(
+        (provider) =>
+          connections[provider] === true && !providerErrors[provider],
+      ),
+    );
+    return missingFeaturedKeys(featuredKeys, items, settled);
+  }, [
+    connections,
+    featuredKeys,
+    featuredTab,
+    items,
+    loading,
+    providerErrors,
+    visibleSources,
+  ]);
 
   const searchNarrowed = searchInput.trim().length > 0;
   const narrowedByUser = searchNarrowed || filtersActive;
-  const sourceError = providerErrors[source] ?? null;
+  const sourceError = source ? (providerErrors[source] ?? null) : null;
 
   const listRows = useMemo(
     () =>
       inboxListRows(visibleItems, {
-        grouped: activeFilters.grouped,
+        // Featured keeps its hand-made order, so it never groups.
+        grouped: !featuredTab && activeFilters.grouped,
         collapsed: collapsedGroups,
         // A search must never hide its matches inside a collapsed group.
         expandAll: searchNarrowed,
@@ -837,6 +955,7 @@ export function InboxView({
     [
       activeFilters.grouped,
       collapsedGroups,
+      featuredTab,
       inboxSeenTick,
       searchNarrowed,
       visibleItems,
@@ -934,7 +1053,7 @@ export function InboxView({
     jiraHiddenProjectIds,
     linearHiddenTeamIds,
     searchInput,
-    source,
+    tab,
   ]);
 
   useEffect(() => {
@@ -980,9 +1099,74 @@ export function InboxView({
     saveInboxFilters(pruned);
   };
 
-  const onSourceChange = (next: InboxSource) => {
-    setSource(next);
+  const onSourceChange = (next: InboxTab) => {
+    setTab(next);
     saveInboxSource(next);
+    setFilterMenu(null);
+  };
+
+  // A filtered subset has no stable place in the full order, so search freezes it.
+  const sortableKeys =
+    featuredTab && !searchNarrowed
+      ? shownRows.flatMap((row) => (row.type === "item" ? [row.key] : []))
+      : [];
+  const featuredSortable = useSortable(
+    sortableKeys,
+    (ids) => saveInboxFeatured(reorderFeaturedKeys(featuredKeys, ids)),
+    { axis: "y" },
+  );
+
+  useEffect(() => {
+    if (!clearedFeatured) return;
+    const timer = setTimeout(() => setClearedFeatured(null), 5000);
+    return () => clearTimeout(timer);
+  }, [clearedFeatured]);
+  useEffect(() => {
+    if (!featuredTab) setClearedFeatured(null);
+  }, [featuredTab]);
+
+  const onClearMissingFeatured = () => {
+    if (missingFeatured.length === 0) return;
+    const previous = featuredKeys;
+    if (!saveInboxFeatured(unfeatureInboxKeys(previous, missingFeatured))) {
+      setReadStatusError("Could not save featured items. Please try again.");
+      return;
+    }
+    setClearedFeatured({ previous, keys: missingFeatured });
+  };
+
+  const onUndoClearFeatured = () => {
+    if (!clearedFeatured) return;
+    saveInboxFeatured(
+      restoreFeaturedKeys(
+        featuredKeys,
+        clearedFeatured.previous,
+        clearedFeatured.keys,
+      ),
+    );
+    setClearedFeatured(null);
+  };
+
+  const itemMenuFeatured = itemMenu ? featuredKeySet.has(itemMenu.key) : false;
+  const itemMenuItems: ExplorerMenuItem[] = [
+    {
+      kind: "item",
+      id: "feature",
+      label: itemMenuFeatured ? "Unfeature" : "Feature",
+    },
+  ];
+  const onItemMenuPick = (id: string) => {
+    const key = itemMenu?.key;
+    setItemMenu(null);
+    if (id !== "feature" || !key) return;
+    const saved = saveInboxFeatured(
+      featuredKeySet.has(key)
+        ? unfeatureInboxKeys(featuredKeys, [key])
+        : featureInboxKey(featuredKeys, key),
+    );
+    setReadStatusError(
+      saved ? null : "Could not save featured items. Please try again.",
+    );
   };
 
   const onFilterButtonClick = (event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -1010,11 +1194,16 @@ export function InboxView({
             className="flex min-w-0 basis-0 items-center gap-px"
             style={{ flexGrow: visibleSources.length }}
           >
+            <InboxFeaturedTab
+              selected={featuredTab}
+              unseen={featuredHasUnseen}
+              onSelect={() => onSourceChange("featured")}
+            />
             {visibleSources.map((option) => (
               <InboxSourceTab
                 key={option}
                 source={option}
-                selected={source === option}
+                selected={tab === option}
                 onSelect={onSourceChange}
               />
             ))}
@@ -1054,19 +1243,21 @@ export function InboxView({
               className="h-7 w-full rounded-md bg-transparent pl-7 pr-2 text-[12px] text-content outline-none placeholder:text-content/40"
             />
           </div>
-          <button
-            type="button"
-            title="Filter inbox"
-            aria-label="Filter inbox"
-            aria-expanded={!!filterMenu}
-            aria-haspopup="menu"
-            onClick={onFilterButtonClick}
-            className={`grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content ${
-              filterMenu || filtersActive ? "bg-selection text-content" : ""
-            }`}
-          >
-            <ListFilter className="size-3" strokeWidth={1.75} />
-          </button>
+          {featuredTab ? null : (
+            <button
+              type="button"
+              title="Filter inbox"
+              aria-label="Filter inbox"
+              aria-expanded={!!filterMenu}
+              aria-haspopup="menu"
+              onClick={onFilterButtonClick}
+              className={`grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content ${
+                filterMenu || filtersActive ? "bg-selection text-content" : ""
+              }`}
+            >
+              <ListFilter className="size-3" strokeWidth={1.75} />
+            </button>
+          )}
           <button
             type="button"
             title="Mark all as read"
@@ -1121,35 +1312,41 @@ export function InboxView({
           </div>
         ) : visibleItems.length === 0 ? (
           <p className="px-3 py-2 text-[12px] text-content/50">
-            {narrowedByUser
+            {!source
               ? searchNarrowed
-                ? isTrackerSource(source)
-                  ? `No matching ${INBOX_SOURCE_LABELS[source]} issues`
-                  : source === "gitlab"
-                    ? "No matching issues or merge requests"
-                    : "No matching issues or pull requests"
+                ? "No matching featured items"
+                : featuredKeys.length > 0
+                  ? "No featured items in the current list"
+                  : "Right-click an item to feature it here"
+              : narrowedByUser
+                ? searchNarrowed
+                  ? isTrackerSource(source)
+                    ? `No matching ${INBOX_SOURCE_LABELS[source]} issues`
+                    : source === "gitlab"
+                      ? "No matching issues or merge requests"
+                      : "No matching issues or pull requests"
+                  : isTrackerSource(source)
+                    ? `No ${INBOX_SOURCE_LABELS[source]} issues match these filters`
+                    : source === "gitlab" || source === "azuredevops"
+                      ? activeFilters.assignedToMe
+                        ? "Nothing needs your attention"
+                        : source === "gitlab"
+                          ? "No GitLab items match these filters"
+                          : "No ADO items match these filters"
+                      : "No issues or pull requests match these filters"
                 : isTrackerSource(source)
-                  ? `No ${INBOX_SOURCE_LABELS[source]} issues match these filters`
-                  : source === "gitlab" || source === "azuredevops"
-                    ? activeFilters.assignedToMe
-                      ? "Nothing needs your attention"
-                      : source === "gitlab"
-                        ? "No GitLab items match these filters"
-                        : "No ADO items match these filters"
-                    : "No issues or pull requests match these filters"
-              : isTrackerSource(source)
-                ? `No ${INBOX_SOURCE_LABELS[source]} issues`
-                : source === "gitlab"
-                  ? projects.length === 0
-                    ? "Open a project to fill the inbox"
-                    : "No matching issues or merge requests"
-                  : projects.length === 0
-                    ? "Open a project to fill the inbox"
-                    : "No matching issues or pull requests"}
+                  ? `No ${INBOX_SOURCE_LABELS[source]} issues`
+                  : source === "gitlab"
+                    ? projects.length === 0
+                      ? "Open a project to fill the inbox"
+                      : "No matching issues or merge requests"
+                    : projects.length === 0
+                      ? "Open a project to fill the inbox"
+                      : "No matching issues or pull requests"}
           </p>
         ) : (
           <ul className="flex flex-col gap-0.5 p-1.5">
-            {shownRows.map((row) => {
+            {shownRows.map((row, index) => {
               if (row.type === "group") {
                 return (
                   <InboxGroupHeader
@@ -1167,15 +1364,52 @@ export function InboxView({
                 item,
                 sessions,
               );
+              const dragging = featuredSortable.draggingId === key;
+              const dropAt =
+                featuredSortable.toIndex === index &&
+                featuredSortable.fromIndex !== null
+                  ? featuredSortable.toIndex < featuredSortable.fromIndex
+                    ? "start"
+                    : featuredSortable.toIndex > featuredSortable.fromIndex
+                      ? "end"
+                      : null
+                  : null;
               return (
-                <li key={key} data-inbox-key={key}>
+                <li
+                  key={key}
+                  data-inbox-key={key}
+                  ref={
+                    featuredTab
+                      ? (el) => featuredSortable.setItemRef(key, el)
+                      : undefined
+                  }
+                  className={`relative ${dragging ? "opacity-40" : ""}`}
+                >
+                  {dropAt === "start" ? (
+                    <div className="pointer-events-none absolute inset-x-1 -top-px z-20 h-0.5 rounded-full bg-accent" />
+                  ) : null}
+                  {dropAt === "end" ? (
+                    <div className="pointer-events-none absolute inset-x-1 -bottom-px z-20 h-0.5 rounded-full bg-accent" />
+                  ) : null}
                   <InboxCard
                     item={item}
                     hideSource={showsGroups}
+                    featured={!featuredTab && featuredKeySet.has(key)}
+                    onPointerDown={
+                      featuredTab
+                        ? (event) =>
+                            featuredSortable.onItemPointerDown(key, event)
+                        : undefined
+                    }
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setItemMenu({ x: event.clientX, y: event.clientY, key });
+                    }}
                     active={selected != null && key === inboxItemKey(selected)}
                     {...projectVisuals(item.projectPath)}
                     relatedSessionCount={relatedSessions.length}
                     onSelect={() => {
+                      if (featuredSortable.consumeClick()) return;
                       markInboxItemSeen({
                         key,
                         updatedAt: item.updatedAt,
@@ -1192,6 +1426,40 @@ export function InboxView({
           </ul>
         )}
       </div>
+      {featuredTab && (clearedFeatured || missingFeatured.length > 0) ? (
+        <div className="flex h-8 shrink-0 items-center gap-2 border-t border-stroke px-3 text-[11px] text-content/50">
+          {clearedFeatured ? (
+            <>
+              <span className="min-w-0 flex-1 truncate">
+                Cleared {clearedFeatured.keys.length} featured{" "}
+                {clearedFeatured.keys.length === 1 ? "item" : "items"}
+              </span>
+              <button
+                type="button"
+                onClick={onUndoClearFeatured}
+                className="shrink-0 rounded px-1.5 py-0.5 text-content/70 hover:bg-content/10 hover:text-content"
+              >
+                Undo
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="min-w-0 flex-1 truncate">
+                {missingFeatured.length} featured{" "}
+                {missingFeatured.length === 1 ? "item is" : "items are"} not in
+                the current list
+              </span>
+              <button
+                type="button"
+                onClick={onClearMissingFeatured}
+                className="shrink-0 rounded px-1.5 py-0.5 text-content/70 hover:bg-content/10 hover:text-content"
+              >
+                Clear
+              </button>
+            </>
+          )}
+        </div>
+      ) : null}
       <div
         role="separator"
         aria-orientation="vertical"
@@ -1205,24 +1473,25 @@ export function InboxView({
     </div>
   );
 
-  const filtersPortal = filterMenu ? (
-    <InboxFiltersMenu
-      x={filterMenu.x}
-      y={filterMenu.y}
-      projects={projectOptions}
-      linearProjects={linearProjects}
-      linearTeams={linearTeams}
-      hiddenLinearTeamIds={linearHiddenTeamIds}
-      jiraProjects={jiraProjects}
-      hiddenJiraProjectIds={jiraHiddenProjectIds}
-      source={source}
-      filters={activeFilters}
-      onChange={onFiltersChange}
-      onLinearTeamsChange={saveHiddenLinearTeamIds}
-      onJiraProjectsChange={saveHiddenJiraProjectIds}
-      onClose={() => setFilterMenu(null)}
-    />
-  ) : null;
+  const filtersPortal =
+    filterMenu && source ? (
+      <InboxFiltersMenu
+        x={filterMenu.x}
+        y={filterMenu.y}
+        projects={projectOptions}
+        linearProjects={linearProjects}
+        linearTeams={linearTeams}
+        hiddenLinearTeamIds={linearHiddenTeamIds}
+        jiraProjects={jiraProjects}
+        hiddenJiraProjectIds={jiraHiddenProjectIds}
+        source={source}
+        filters={activeFilters}
+        onChange={onFiltersChange}
+        onLinearTeamsChange={saveHiddenLinearTeamIds}
+        onJiraProjectsChange={saveHiddenJiraProjectIds}
+        onClose={() => setFilterMenu(null)}
+      />
+    ) : null;
 
   const connectPortal =
     connectMenuOpen && connectableSources.length > 0 ? (
@@ -1294,6 +1563,16 @@ export function InboxView({
       </div>
       {filtersPortal}
       {connectPortal}
+      {itemMenu ? (
+        <ExplorerMenu
+          x={itemMenu.x}
+          y={itemMenu.y}
+          items={itemMenuItems}
+          ariaLabel="Inbox item actions"
+          onPick={onItemMenuPick}
+          onClose={() => setItemMenu(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1689,21 +1968,28 @@ function InboxCard({
   item,
   hideSource = false,
   active,
+  featured,
   logoPath,
   mascotName,
   mascotColor,
   relatedSessionCount,
   onSelect,
+  onPointerDown,
+  onContextMenu,
 }: {
   item: InboxItem;
   /** Inside a group header the repository or team would only repeat. */
   hideSource?: boolean;
   active: boolean;
+  /** Marks a featured item on its provider tab; the Featured tab omits it. */
+  featured: boolean;
   logoPath: string | null;
   mascotName: string | null;
   mascotColor: string;
   relatedSessionCount: number;
   onSelect: () => void;
+  onPointerDown?: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+  onContextMenu: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }) {
   useInboxSeenTick();
   const status = inboxStatusMark(item);
@@ -1733,9 +2019,11 @@ function InboxCard({
       aria-current={active ? "true" : undefined}
       aria-label={`${status.label} ${kindLabel.toLowerCase()} ${inboxItemRef(
         item,
-      )}: ${item.title}${attentionLabel ? `, ${attentionLabel}` : ""}${unseen ? ", new" : ""}${relatedSessionCount > 0 ? `, ${relatedSessionCount} related ${relatedSessionCount === 1 ? "thread" : "threads"}` : ""}`}
+      )}: ${item.title}${attentionLabel ? `, ${attentionLabel}` : ""}${featured ? ", featured" : ""}${unseen ? ", new" : ""}${relatedSessionCount > 0 ? `, ${relatedSessionCount} related ${relatedSessionCount === 1 ? "thread" : "threads"}` : ""}`}
       onClick={onSelect}
-      className={`flex w-full flex-col rounded-md border px-2.5 py-2 text-left ${
+      onPointerDown={onPointerDown}
+      onContextMenu={onContextMenu}
+      className={`flex w-full select-none flex-col rounded-md border px-2.5 py-2 text-left ${
         active
           ? "border-transparent bg-selection text-content"
           : "border-transparent text-content/80 hover:bg-content/5 hover:text-content"
@@ -1756,8 +2044,15 @@ function InboxCard({
             {attentionLabel ? ` · ${attentionLabel}` : ""}
           </span>
         </span>
-        {relatedSessionCount > 0 || time || unseen ? (
+        {featured || relatedSessionCount > 0 || time || unseen ? (
           <span className="flex shrink-0 items-center gap-1.5">
+            {featured ? (
+              <Star
+                aria-hidden
+                className="size-3 text-content/45"
+                strokeWidth={1.75}
+              />
+            ) : null}
             {relatedSessionCount > 0 ? (
               <span
                 title={`${relatedSessionCount} related ${relatedSessionCount === 1 ? "thread" : "threads"}`}
