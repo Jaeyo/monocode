@@ -14,6 +14,7 @@ mod external_editor;
 mod external_sessions;
 mod fs;
 mod github_host;
+mod github_inbox;
 mod gitlab;
 mod harness;
 mod harness_updates;
@@ -346,7 +347,11 @@ pub fn run() {
             fs::git_github_repo,
             fs::git_github_repositories,
             fs::git_github_work_item,
-            fs::git_github_work_items,
+            github_inbox::git_github_inbox_items,
+            fs::github_rate_limit_backoff,
+            github_inbox::git_github_inbox_probe,
+            github_inbox::github_inbox_cache_load,
+            github_inbox::github_inbox_cache_save,
             fs::git_github_work_item_details,
             fs::git_github_work_item_thread,
             fs::git_github_work_item_comment,

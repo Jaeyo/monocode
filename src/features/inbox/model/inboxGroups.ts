@@ -75,21 +75,23 @@ function isOtherGroup(group: InboxGroup): boolean {
 }
 
 /**
- * Flattens groups into list rows. A single group renders flat — a lone header
- * says nothing. `expanded` overrides saved collapse state (search, a targeted
- * item) without touching it.
+ * Flattens groups into list rows. Groups start collapsed, so an Inbox over
+ * many repositories opens as a short list of headers; `expanded` holds the
+ * ones the user opened. A single group renders flat — a lone header says
+ * nothing. `expandAll` and `expandedIds` open groups (search, a targeted
+ * item) without touching the saved state.
  */
 export function inboxListRows(
   items: InboxItem[],
   {
     grouped,
-    collapsed,
+    expanded,
     expandAll = false,
     expandedIds = [],
     isUnseen,
   }: {
     grouped: boolean;
-    collapsed: ReadonlySet<string>;
+    expanded: ReadonlySet<string>;
     expandAll?: boolean;
     expandedIds?: readonly string[];
     isUnseen: (item: InboxItem) => boolean;
@@ -107,7 +109,7 @@ export function inboxListRows(
   const rows: InboxListRow[] = [];
   for (const group of groups) {
     const isCollapsed =
-      !expandAll && !forced.has(group.id) && collapsed.has(group.id);
+      !expandAll && !forced.has(group.id) && !expanded.has(group.id);
     rows.push({
       type: "group",
       group,
@@ -119,11 +121,14 @@ export function inboxListRows(
   return rows;
 }
 
-const COLLAPSED_KEY = "monocode.inboxCollapsedGroups";
+const EXPANDED_KEY = "monocode.inboxExpandedGroups";
+/** Collapse state from before groups started collapsed; no longer read. */
+const LEGACY_COLLAPSED_KEY = "monocode.inboxCollapsedGroups";
 
-export function loadInboxCollapsedGroups(): Set<string> {
+export function loadInboxExpandedGroups(): Set<string> {
   try {
-    const raw = localStorage.getItem(COLLAPSED_KEY);
+    localStorage.removeItem(LEGACY_COLLAPSED_KEY);
+    const raw = localStorage.getItem(EXPANDED_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
     return new Set(
       Array.isArray(parsed)
@@ -137,9 +142,9 @@ export function loadInboxCollapsedGroups(): Set<string> {
   }
 }
 
-export function saveInboxCollapsedGroups(ids: ReadonlySet<string>) {
+export function saveInboxExpandedGroups(ids: ReadonlySet<string>) {
   try {
-    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...ids]));
+    localStorage.setItem(EXPANDED_KEY, JSON.stringify([...ids]));
   } catch {
     // private mode / quota
   }

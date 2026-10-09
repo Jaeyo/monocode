@@ -3,8 +3,8 @@ import type { InboxItem } from "./githubTasks";
 import {
   groupInboxItems,
   inboxListRows,
-  loadInboxCollapsedGroups,
-  saveInboxCollapsedGroups,
+  loadInboxExpandedGroups,
+  saveInboxExpandedGroups,
 } from "./inboxGroups";
 
 function item(
@@ -102,7 +102,7 @@ describe("inboxListRows", () => {
     expect(
       inboxListRows(rows, {
         grouped: false,
-        collapsed: new Set(),
+        expanded: new Set(),
         isUnseen: never,
       }).map((row) => row.type),
     ).toEqual(["item", "item"]);
@@ -112,28 +112,38 @@ describe("inboxListRows", () => {
     expect(
       inboxListRows([rows[0]!], {
         grouped: true,
-        collapsed: new Set(["github:acme/web"]),
+        expanded: new Set(),
         isUnseen: never,
       }).map((row) => row.type),
     ).toEqual(["item"]);
   });
 
-  it("hides collapsed group items and counts unseen ones", () => {
+  it("starts groups collapsed and counts their unseen items", () => {
     const result = inboxListRows(rows, {
       grouped: true,
-      collapsed: new Set(["github:acme/web"]),
+      expanded: new Set(),
       isUnseen: (entry) => entry.number === 1,
     });
-    expect(result.map((row) => row.type)).toEqual(["group", "group", "item"]);
+    expect(result.map((row) => row.type)).toEqual(["group", "group"]);
     expect(result[0]).toMatchObject({ collapsed: true, unseen: 1 });
   });
 
+  it("shows the items of groups the user expanded", () => {
+    const result = inboxListRows(rows, {
+      grouped: true,
+      expanded: new Set(["github:acme/api"]),
+      isUnseen: never,
+    });
+    expect(result.map((row) => row.type)).toEqual(["group", "group", "item"]);
+    expect(result[1]).toMatchObject({ collapsed: false });
+  });
+
   it("expands collapsed groups while forced without changing state", () => {
-    const collapsed = new Set(["github:acme/web", "github:acme/api"]);
+    const expanded = new Set<string>();
     expect(
       inboxListRows(rows, {
         grouped: true,
-        collapsed,
+        expanded,
         expandAll: true,
         isUnseen: never,
       }).filter((row) => row.type === "item"),
@@ -141,12 +151,12 @@ describe("inboxListRows", () => {
     expect(
       inboxListRows(rows, {
         grouped: true,
-        collapsed,
+        expanded,
         expandedIds: ["github:acme/api"],
         isUnseen: never,
       }).map((row) => row.type),
     ).toEqual(["group", "group", "item"]);
-    expect(collapsed.size).toBe(2);
+    expect(expanded.size).toBe(0);
   });
 });
 
@@ -167,13 +177,22 @@ function mockLocalStorage() {
   });
 }
 
-describe("collapsed group storage", () => {
+describe("expanded group storage", () => {
   beforeEach(mockLocalStorage);
 
   it("round-trips and ignores malformed data", () => {
-    saveInboxCollapsedGroups(new Set(["github:acme/web"]));
-    expect([...loadInboxCollapsedGroups()]).toEqual(["github:acme/web"]);
-    localStorage.setItem("monocode.inboxCollapsedGroups", "{bad");
-    expect(loadInboxCollapsedGroups().size).toBe(0);
+    saveInboxExpandedGroups(new Set(["github:acme/web"]));
+    expect([...loadInboxExpandedGroups()]).toEqual(["github:acme/web"]);
+    localStorage.setItem("monocode.inboxExpandedGroups", "{bad");
+    expect(loadInboxExpandedGroups().size).toBe(0);
+  });
+
+  it("drops the collapse state saved before groups started collapsed", () => {
+    localStorage.setItem(
+      "monocode.inboxCollapsedGroups",
+      '["github:acme/web"]',
+    );
+    expect(loadInboxExpandedGroups().size).toBe(0);
+    expect(localStorage.getItem("monocode.inboxCollapsedGroups")).toBeNull();
   });
 });

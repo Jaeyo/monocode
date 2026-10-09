@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -1334,32 +1334,6 @@ pub async fn git_github_repositories(cwd: String) -> Result<Vec<String>, String>
     tauri::async_runtime::spawn_blocking(move || git_github_repositories_for(&expand_home(&cwd)))
         .await
         .map_err(|e| e.to_string())?
-}
-
-/// Open issues or pull requests for one GitHub repository, via `gh`.
-#[tauri::command]
-pub async fn git_github_work_items(
-    cwd: String,
-    repo: String,
-    kind: String,
-    assigned_to_me: bool,
-    state: String,
-    search: String,
-    limit: Option<u32>,
-) -> Result<Vec<GitHubWorkItem>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_items_for(
-            &expand_home(&cwd),
-            &repo,
-            &kind,
-            assigned_to_me,
-            &state,
-            &search,
-            limit.unwrap_or(40),
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 /// One issue or pull request by number, used when session navigation misses
@@ -2759,58 +2733,6 @@ fn parse_github_repositories(json: &str) -> Result<Vec<String>, String> {
     Ok(repos)
 }
 
-fn git_github_work_items_for(
-    root: &Path,
-    repo: &str,
-    kind: &str,
-    assigned_to_me: bool,
-    state: &str,
-    search: &str,
-    limit: u32,
-) -> Result<Vec<GitHubWorkItem>, String> {
-    let kind = kind.trim();
-    if kind != "issue" && kind != "pr" {
-        return Err("Unknown GitHub task kind".into());
-    }
-    let (owner, name) = split_github_repo(repo)?;
-    let repo = format!("{owner}/{name}");
-    let state = if state.trim().eq_ignore_ascii_case("all") {
-        "all"
-    } else {
-        "open"
-    };
-    let limit = limit.clamp(1, 100).to_string();
-    let fields = if kind == "pr" {
-        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
-    } else {
-        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees"
-    };
-    let mut args = vec![
-        kind.to_string(),
-        "list".into(),
-        "--state".into(),
-        state.into(),
-        "--limit".into(),
-        limit,
-        "--repo".into(),
-        repo.clone(),
-        "--json".into(),
-        fields.into(),
-    ];
-    if assigned_to_me {
-        args.push("--assignee".into());
-        args.push("@me".into());
-    }
-    let search = search.trim();
-    if !search.is_empty() {
-        args.push("--search".into());
-        args.push(search.to_string());
-    }
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let json = gh_checked(root, &refs)?;
-    parse_github_work_items(&json, kind, &repo)
-}
-
 fn git_github_work_item_for(
     root: &Path,
     repo: &str,
@@ -3246,7 +3168,7 @@ fn parse_github_review_reply_url(json: &str) -> Result<String, String> {
     Err("GitHub did not return a comment URL".into())
 }
 
-fn split_github_repo(slug: &str) -> Result<(String, String), String> {
+pub(crate) fn split_github_repo(slug: &str) -> Result<(String, String), String> {
     let slug = slug.trim();
     let Some((owner, name)) = slug.split_once('/') else {
         return Err("GitHub did not return a repository".into());
@@ -3627,7 +3549,7 @@ fn github_review_thread(thread: GithubGraphqlReviewThread) -> Option<GitHubWorkI
     Some(first)
 }
 
-fn github_avatar_url(login: &str) -> String {
+pub(crate) fn github_avatar_url(login: &str) -> String {
     github_avatar_url_for(&crate::github_host::current(), login)
 }
 
@@ -4173,6 +4095,29 @@ struct GitHubRateLimitBackoff {
 // Shared by all webviews, including background Inbox and PR checks requests.
 static GITHUB_RATE_LIMIT_BACKOFF: Mutex<Option<GitHubRateLimitBackoff>> = Mutex::new(None);
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubBackoffStatus {
+    /// Unix milliseconds when `gh` calls resume.
+    pub until: u64,
+    pub error: String,
+}
+
+/// The active rate-limit pause, if any, so the Inbox can say until when.
+#[tauri::command]
+pub fn github_rate_limit_backoff() -> Option<GitHubBackoffStatus> {
+    let mut slot = GITHUB_RATE_LIMIT_BACKOFF.lock().ok()?;
+    github_rate_limit_error(&mut slot, SystemTime::now())?;
+    let active = slot.as_ref()?;
+    Some(GitHubBackoffStatus {
+        until: active
+            .until
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as u64),
+        error: active.error.clone(),
+    })
+}
+
 fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
     gh_with_backoff(
         &GITHUB_RATE_LIMIT_BACKOFF,
@@ -4277,7 +4222,61 @@ fn parse_github_rate_limit_backoff(json: &str) -> Result<Option<SystemTime>, Str
         .ok_or_else(|| "Invalid GitHub rate-limit reset".into())
 }
 
+/// Caps concurrent `gh` processes. Bursts of parallel GitHub requests trip the
+/// secondary rate limit even when the hourly quota is far from exhausted.
+struct GhPermits {
+    available: Mutex<usize>,
+    released: Condvar,
+}
+
+struct GhPermit<'a>(&'a GhPermits);
+
+impl GhPermits {
+    const fn new(limit: usize) -> Self {
+        Self {
+            available: Mutex::new(limit),
+            released: Condvar::new(),
+        }
+    }
+
+    fn acquire(&self) -> GhPermit<'_> {
+        let mut available = self.available.lock().unwrap_or_else(|e| e.into_inner());
+        while *available == 0 {
+            available = self
+                .released
+                .wait(available)
+                .unwrap_or_else(|e| e.into_inner());
+        }
+        *available -= 1;
+        GhPermit(self)
+    }
+}
+
+impl Drop for GhPermit<'_> {
+    fn drop(&mut self) {
+        *self.0.available.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        self.0.released.notify_one();
+    }
+}
+
+static GH_PERMITS: GhPermits = GhPermits::new(4);
+
 fn gh_run_raw(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
+    let output = gh_output(root, args)?;
+    if output.status.success() {
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if text.is_empty() {
+            if allow_empty {
+                return Ok(String::new());
+            }
+            return Err("gh returned no output".into());
+        }
+        return Ok(text);
+    }
+    Err(gh_failure_detail(&output, args))
+}
+
+fn gh_output(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
     let program = crate::harness::resolve_gui_binary("gh")
         .ok_or_else(|| "GitHub CLI (`gh`) is not installed.".to_string())?;
     let mut cmd = Command::new(&program);
@@ -4290,33 +4289,53 @@ fn gh_run_raw(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, S
         .env("GIT_PAGER", "cat");
     crate::harness::apply_gui_env(&mut cmd);
     crate::hide_window_console(&mut cmd);
-    let output = cmd.output().map_err(|error| {
+    let permit = GH_PERMITS.acquire();
+    let output = cmd.output();
+    drop(permit);
+    output.map_err(|error| {
         if error.kind() == ErrorKind::NotFound {
             "GitHub CLI (`gh`) is not installed.".to_string()
         } else {
             error.to_string()
         }
-    })?;
-    if output.status.success() {
-        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if text.is_empty() {
-            if allow_empty {
-                return Ok(String::new());
-            }
-            return Err("gh returned no output".into());
-        }
-        return Ok(text);
-    }
+    })
+}
+
+fn gh_failure_detail(output: &std::process::Output, args: &[&str]) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let detail = if !stderr.is_empty() {
+    if !stderr.is_empty() {
         stderr
     } else if !stdout.is_empty() {
         stdout
     } else {
         format!("gh {} failed", args.join(" "))
-    };
-    Err(detail)
+    }
+}
+
+/// Runs `gh api graphql`, keeping a partial response: gh exits non-zero when
+/// any alias fails, but one missing repository must not discard a whole batch.
+pub(crate) fn gh_graphql(args: &[&str]) -> Result<String, String> {
+    gh_with_backoff(&GITHUB_RATE_LIMIT_BACKOFF, args, false, |args, _| {
+        let output = gh_output(Path::new("."), args)?;
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if output.status.success() || graphql_has_data(&stdout) {
+            return Ok(stdout);
+        }
+        let detail = gh_failure_detail(&output, args);
+        // The backoff resolves a GraphQL quota reset only for GraphQL errors.
+        Err(if detail.to_lowercase().contains("graphql") {
+            detail
+        } else {
+            format!("GraphQL: {detail}")
+        })
+    })
+}
+
+fn graphql_has_data(stdout: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(stdout)
+        .ok()
+        .is_some_and(|value| value["data"].is_object())
 }
 
 pub(crate) fn resolve_repo_path(root: &Path, relative: &str) -> Result<String, String> {
@@ -6068,6 +6087,30 @@ mod tests {
         .is_err());
         assert_eq!(calls, 1);
         assert!(backoff.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn gh_permits_cap_concurrent_processes() {
+        let permits = Arc::new(GhPermits::new(2));
+        let running = Arc::new(AtomicU64::new(0));
+        let peak = Arc::new(AtomicU64::new(0));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let (permits, running, peak) = (permits.clone(), running.clone(), peak.clone());
+                std::thread::spawn(move || {
+                    let _permit = permits.acquire();
+                    let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(10));
+                    running.fetch_sub(1, Ordering::SeqCst);
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+        assert_eq!(*permits.available.lock().unwrap(), 2);
     }
 
     #[test]

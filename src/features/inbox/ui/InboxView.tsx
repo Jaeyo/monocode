@@ -68,6 +68,8 @@ import {
   inboxItemKey,
   inboxItemRef,
   inboxItemStatus,
+  inboxListCacheKey,
+  inboxListFetchedAt,
   inboxListIsFresh,
   inboxProjectsForRail,
   listInboxItems,
@@ -81,6 +83,7 @@ import {
   filterInboxItems,
   type GithubIssueAction,
   type GithubLabel,
+  type GithubRateLimit,
   type GithubPrAction,
   type GithubPrDiff,
   GITHUB_WORK_ITEM_FRESH_MS,
@@ -116,8 +119,8 @@ import {
 import {
   inboxGroupId,
   inboxListRows,
-  loadInboxCollapsedGroups,
-  saveInboxCollapsedGroups,
+  loadInboxExpandedGroups,
+  saveInboxExpandedGroups,
   type InboxGroup,
 } from "../model/inboxGroups";
 import {
@@ -130,6 +133,10 @@ import {
   unfeatureInboxKeys,
   useInboxFeatured,
 } from "../model/inboxFeatured";
+import {
+  githubQuotaMessage,
+  useGithubQuota,
+} from "../model/githubRateLimit";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
@@ -308,6 +315,24 @@ function InboxProjectMark({
   );
 }
 
+function refreshTitle(
+  fetchedAt: number | null,
+  rateLimit: GithubRateLimit | null,
+): string {
+  const parts = ["Refresh"];
+  if (fetchedAt != null) {
+    parts.push(
+      `updated ${formatRelativeTime(new Date(fetchedAt).toISOString())}`,
+    );
+  }
+  if (rateLimit) {
+    parts.push(
+      `GitHub ${rateLimit.remaining.toLocaleString()} of ${rateLimit.limit.toLocaleString()} left this hour`,
+    );
+  }
+  return parts.join(" · ");
+}
+
 function peekInboxForRail(recents: RecentProject[], cwd: string) {
   const projects = inboxProjectsForRail(recents, cwd);
   const filters = pruneInboxFilters(
@@ -320,6 +345,7 @@ function peekInboxForRail(recents: RecentProject[], cwd: string) {
     search: "",
     linearHiddenTeamIds: loadHiddenLinearTeamIds(),
     jiraHiddenProjectIds: loadHiddenJiraProjectIds(),
+    hiddenProjects: filters.hiddenProjects,
   });
 }
 
@@ -510,8 +536,8 @@ export function InboxView({
   );
   const [targetItem, setTargetItem] = useState<InboxItem | null>(null);
   const [filters, setFilters] = useState(loadInboxFilters);
-  const [collapsedGroups, setCollapsedGroups] = useState(
-    loadInboxCollapsedGroups,
+  const [expandedGroups, setExpandedGroups] = useState(
+    loadInboxExpandedGroups,
   );
   const [connections, setConnections] = useState(loadInboxConnections);
   const [tab, setTab] = useState(() =>
@@ -550,6 +576,9 @@ export function InboxView({
   );
   const [jiraProjects, setJiraProjects] = useState<JiraProject[]>([]);
   const prevRefresh = useRef(refresh);
+  /** Cache key, minus hidden projects, of the list currently on screen. */
+  const shownKeyRef = useRef<string | null>(null);
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null);
 
   const projects = useMemo(
     () => inboxProjectsForRail(recents, cwd),
@@ -578,6 +607,8 @@ export function InboxView({
       jiraHiddenProjectIds,
     );
   const fetchState = inboxFetchState(activeFilters);
+  // A string so that unrelated filter edits keep the query, and its effect, stable.
+  const hiddenProjectsKey = activeFilters.hiddenProjects.join("\n");
   const fetchQuery = useMemo<InboxQuery>(
     () => ({
       assignedToMe: activeFilters.assignedToMe,
@@ -585,12 +616,16 @@ export function InboxView({
       search: "",
       linearHiddenTeamIds,
       jiraHiddenProjectIds,
+      hiddenProjects: hiddenProjectsKey ? hiddenProjectsKey.split("\n") : [],
+      featuredKeys,
     }),
     [
       activeFilters.assignedToMe,
       fetchState,
       linearHiddenTeamIds,
       jiraHiddenProjectIds,
+      hiddenProjectsKey,
+      featuredKeys,
     ],
   );
 
@@ -778,10 +813,19 @@ export function InboxView({
   useEffect(() => {
     const force = refresh !== prevRefresh.current;
     prevRefresh.current = refresh;
+    // Hiding or showing a project only narrows or widens the fetch. The list
+    // on screen is already filtered for it, so keep it up while that settles.
+    const shownKey = inboxListCacheKey(projects, {
+      ...fetchQuery,
+      hiddenProjects: [],
+    });
+    const sameList = shownKeyRef.current === shownKey;
     const cached = peekInboxList(projects, fetchQuery);
     if (cached) {
+      shownKeyRef.current = shownKey;
       setItems(cached.items);
       setProviderErrors(cached.errors);
+      setFetchedAt(inboxListFetchedAt(projects, fetchQuery));
       setLoading(false);
     }
     if (!force && cached && inboxListIsFresh(projects, fetchQuery)) {
@@ -789,7 +833,7 @@ export function InboxView({
     }
 
     let cancelled = false;
-    if (cached) setRevalidating(true);
+    if (cached || sameList) setRevalidating(true);
     else {
       setLoading(true);
       setProviderErrors({});
@@ -797,8 +841,10 @@ export function InboxView({
     void listInboxItems(projects, fetchQuery, { force })
       .then((next) => {
         if (cancelled) return;
+        shownKeyRef.current = shownKey;
         setItems(next.items);
         setProviderErrors(next.errors);
+        setFetchedAt(inboxListFetchedAt(projects, fetchQuery));
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -947,13 +993,15 @@ export function InboxView({
   const searchNarrowed = searchInput.trim().length > 0;
   const narrowedByUser = searchNarrowed || filtersActive;
   const sourceError = source ? (providerErrors[source] ?? null) : null;
+  const githubQuota = useGithubQuota();
+  const githubQuotaNotice = githubQuotaMessage(githubQuota, Date.now());
 
   const listRows = useMemo(
     () =>
       inboxListRows(visibleItems, {
         // Featured keeps its hand-made order, so it never groups.
         grouped: !featuredTab && activeFilters.grouped,
-        collapsed: collapsedGroups,
+        expanded: expandedGroups,
         // A search must never hide its matches inside a collapsed group.
         expandAll: searchNarrowed,
         isUnseen: (item) =>
@@ -964,7 +1012,7 @@ export function InboxView({
       }),
     [
       activeFilters.grouped,
-      collapsedGroups,
+      expandedGroups,
       featuredTab,
       inboxSeenTick,
       searchNarrowed,
@@ -1019,11 +1067,11 @@ export function InboxView({
   };
 
   const toggleGroup = (id: string) => {
-    setCollapsedGroups((current) => {
+    setExpandedGroups((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      saveInboxCollapsedGroups(next);
+      saveInboxExpandedGroups(next);
       return next;
     });
   };
@@ -1040,11 +1088,11 @@ export function InboxView({
     if (!targetSelectionKey || !targetListItem) return;
     if (revealedTargetRef.current === targetSelectionKey) return;
     const groupId = inboxGroupId(targetListItem);
-    if (collapsedGroups.has(groupId)) {
-      const next = new Set(collapsedGroups);
-      next.delete(groupId);
-      saveInboxCollapsedGroups(next);
-      setCollapsedGroups(next);
+    if (!expandedGroups.has(groupId)) {
+      const next = new Set(expandedGroups);
+      next.add(groupId);
+      saveInboxExpandedGroups(next);
+      setExpandedGroups(next);
       return;
     }
     if (targetRowIndex < 0) return;
@@ -1052,7 +1100,7 @@ export function InboxView({
     listScrollRef.current
       ?.querySelector(`[data-inbox-key="${CSS.escape(targetSelectionKey)}"]`)
       ?.scrollIntoView({ block: "nearest" });
-  }, [collapsedGroups, targetListItem, targetRowIndex, targetSelectionKey]);
+  }, [expandedGroups, targetListItem, targetRowIndex, targetSelectionKey]);
 
   useEffect(() => {
     setListLimit(LIST_PAGE_SIZE);
@@ -1319,6 +1367,7 @@ export function InboxView({
           <button
             type="button"
             aria-label="Refresh"
+            title={refreshTitle(fetchedAt, githubQuota.rateLimit)}
             onClick={() => setRefresh((value) => value + 1)}
             className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
           >
@@ -1468,6 +1517,14 @@ export function InboxView({
           </ul>
         )}
       </div>
+      {(source === "github" || featuredTab) && githubQuotaNotice ? (
+        <p
+          role="status"
+          className="flex h-8 shrink-0 items-center border-t border-stroke px-3 text-[11px] text-content/50"
+        >
+          <span className="min-w-0 flex-1 truncate">{githubQuotaNotice}</span>
+        </p>
+      ) : null}
       {featuredTab && (clearedFeatured || missingFeatured.length > 0) ? (
         <div className="flex h-8 shrink-0 items-center gap-2 border-t border-stroke px-3 text-[11px] text-content/50">
           {clearedFeatured ? (

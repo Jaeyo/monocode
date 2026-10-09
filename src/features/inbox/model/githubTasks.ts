@@ -40,6 +40,14 @@ import {
   type RecentProject,
 } from "../../projects/model/recents";
 import { recordInboxSelfActivity } from "./inboxSelfActivity";
+import {
+  clearGithubInboxSnapshots,
+  discoveredRepositories,
+  loadGithubInboxSnapshots,
+  refreshGithubRepos,
+  rememberDiscovery,
+} from "./githubInboxSnapshots";
+import { recordGithubRefresh } from "./githubRateLimit";
 import { isGithubDotcom } from "./githubHost";
 
 export type GithubTaskKind = "issue" | "pr";
@@ -159,6 +167,13 @@ export type GithubWorkItemQuery = {
 export type InboxQuery = Omit<GithubWorkItemQuery, "kind"> & {
   linearHiddenTeamIds?: string[];
   jiraHiddenProjectIds?: string[];
+  /** Project paths hidden in the Inbox filters; their repositories are not fetched. */
+  hiddenProjects?: readonly string[];
+  /**
+   * Featured `inboxItemKey`s. A hidden project's repository is still fetched
+   * while it holds one, so the pin does not look like a vanished item.
+   */
+  featuredKeys?: readonly string[];
 };
 
 export type InboxProviderErrors = Partial<Record<InboxProvider, string>>;
@@ -230,6 +245,7 @@ export function clearInboxCache() {
   prDiffInflight.clear();
   clearGitlabCache();
   clearAzureDevOpsCache();
+  clearGithubInboxSnapshots();
 }
 
 export function inboxListCacheKey(
@@ -242,7 +258,11 @@ export function inboxListCacheKey(
     .join("|");
   const teams = [...(query.linearHiddenTeamIds ?? [])].sort().join(",");
   const jiraProjects = [...(query.jiraHiddenProjectIds ?? [])].sort().join(",");
-  return `${query.assignedToMe ? 1 : 0}:${query.state}:${paths}:${teams}:${jiraProjects}`;
+  const hidden = [...(query.hiddenProjects ?? [])]
+    .map(normalizeProjectPath)
+    .sort()
+    .join("|");
+  return `${query.assignedToMe ? 1 : 0}:${query.state}:${paths}:${teams}:${jiraProjects}:${hidden}`;
 }
 
 export function peekInboxList(
@@ -271,6 +291,15 @@ export function inboxListIsFresh(
     inboxListCache?.key === key &&
     now - inboxListCache.fetchedAt < INBOX_CACHE_FRESH_MS
   );
+}
+
+/** When the cached list for this query arrived, or null when there is none. */
+export function inboxListFetchedAt(
+  projects: readonly { path: string }[],
+  query: InboxQuery,
+): number | null {
+  const key = inboxListCacheKey(projects, query);
+  return inboxListCache?.key === key ? inboxListCache.fetchedAt : null;
 }
 
 export function githubStatus(): Promise<GithubStatus> {
@@ -302,29 +331,61 @@ export async function githubRepositories(cwd: string): Promise<string[]> {
   const key = normalizeProjectPath(cwd);
   const cached = repositoriesByPath.get(key);
   if (cached) return cached;
-  const repositories = await invoke<string[]>("git_github_repositories", {
-    cwd,
-  });
+  await loadGithubInboxSnapshots();
+  const generation = inboxCacheGeneration;
+  const repositories =
+    discoveredRepositories(cwd) ??
+    (await invoke<string[]>("git_github_repositories", { cwd }));
   if (repositories.length === 0) {
     throw new Error("GitHub did not return a repository");
   }
+  if (generation !== inboxCacheGeneration) return repositories;
+  rememberDiscovery(cwd, repositories);
   repositoriesByPath.set(key, repositories);
   repoByPath.set(key, repositories[0]!);
   return repositories;
 }
 
-export function listGithubWorkItems(
-  cwd: string,
-  repo: string,
-  query: GithubWorkItemQuery,
-): Promise<GithubWorkItem[]> {
-  return invoke<GithubWorkItem[]>("git_github_work_items", {
-    cwd,
-    repo,
-    kind: query.kind,
+export type GithubRateLimit = {
+  limit: number;
+  remaining: number;
+  resetAt: string;
+  /** Points the batch spent. */
+  cost: number;
+};
+
+export type GithubInboxRepo = {
+  repo: string;
+  items: GithubWorkItem[];
+  /** Newest activity in the repository in any state; empty when unknown. */
+  latestUpdatedAt: string;
+  error?: string | null;
+  /** The request failed rather than the repository; keep what is cached. */
+  retryable?: boolean;
+};
+
+export type GithubInboxBatch = {
+  repos: GithubInboxRepo[];
+  viewer: string;
+  rateLimit: GithubRateLimit | null;
+};
+
+/** Each repository's newest activity, in one cheap query for all of them. */
+export function probeGithubInboxRepos(
+  repos: readonly string[],
+): Promise<GithubInboxBatch> {
+  return invoke<GithubInboxBatch>("git_github_inbox_probe", { repos });
+}
+
+/** Issues and pull requests for many repositories in a few GraphQL requests. */
+export function listGithubInboxItems(
+  repos: readonly string[],
+  query: Pick<InboxQuery, "assignedToMe" | "state">,
+): Promise<GithubInboxBatch> {
+  return invoke<GithubInboxBatch>("git_github_inbox_items", {
+    repos,
     assignedToMe: query.assignedToMe,
     state: query.state,
-    search: query.search.trim(),
     limit: query.state === "all" ? INBOX_ALL_LIMIT : undefined,
   });
 }
@@ -775,26 +836,16 @@ async function fetchInboxItems(
       ? result.value.map((repo) => ({ path: unique[index]!.path, repo }))
       : [],
   );
-  const grouped = groupProjectsByRepo(resolved);
-  const githubJobs = grouped.flatMap((project) =>
-    (["issue", "pr"] as const).map(async (kind) => {
-      const items = await listGithubWorkItems(project.path, project.repo, {
-        ...query,
-        kind,
-      });
-      return items.map((item) => ({
-        ...item,
-        projectPath: project.path,
-        provider: "github" as const,
-        repo: item.repo || project.repo,
-      }));
-    }),
+  const grouped = groupProjectsByRepo(
+    skipHiddenProjects(resolved, query, "github"),
   );
   const discoveryFailures = discovery.filter(
     (result): result is PromiseRejectedResult => result.status === "rejected",
   );
-  const github = collectInboxResults(
-    [...(await Promise.allSettled(githubJobs)), ...discoveryFailures],
+  const github = await fetchGithubInboxItems(
+    grouped,
+    query,
+    discoveryFailures,
     preferredPaths,
   );
   const errors: InboxProviderErrors = {};
@@ -857,6 +908,53 @@ async function fetchInboxItems(
   };
 }
 
+/**
+ * GitHub items for the grouped repositories. Each repository settles on its
+ * own, so one failure cannot hide the rest; when GitHub cannot be reached the
+ * last snapshots stay visible beside the error.
+ */
+async function fetchGithubInboxItems(
+  projects: readonly { path: string; repo: string }[],
+  query: InboxQuery,
+  discoveryFailures: readonly PromiseRejectedResult[],
+  preferredPaths: readonly string[],
+): Promise<{ items: InboxItem[]; error?: string }> {
+  if (projects.length === 0) {
+    return collectInboxResults([...discoveryFailures], preferredPaths);
+  }
+  const refreshed = await refreshGithubRepos(
+    projects.map((project) => project.repo),
+    query,
+    { list: listGithubInboxItems, probe: probeGithubInboxRepos },
+  );
+  void recordGithubRefresh(refreshed.rateLimit, refreshed.error);
+  const pathByRepo = new Map(
+    projects.map((project) => [project.repo.toLowerCase(), project.path]),
+  );
+  const settled = refreshed.repos.map(
+    (entry): PromiseSettledResult<InboxItem[]> => {
+      if (entry.error) {
+        return { status: "rejected", reason: new Error(entry.error) };
+      }
+      const projectPath = pathByRepo.get(entry.repo.toLowerCase()) ?? "";
+      return {
+        status: "fulfilled",
+        value: entry.items.map((item) => ({
+          ...item,
+          projectPath,
+          provider: "github" as const,
+          repo: item.repo || entry.repo,
+        })),
+      };
+    },
+  );
+  const github = collectInboxResults(
+    [...settled, ...discoveryFailures],
+    preferredPaths,
+  );
+  return refreshed.error ? { ...github, error: refreshed.error } : github;
+}
+
 async function fetchRepositoryInboxItems(
   provider: "gitlab" | "azuredevops",
   projects: readonly { path: string }[],
@@ -889,11 +987,11 @@ async function fetchRepositoryInboxItems(
       }
     }),
   );
-  const grouped = groupProjectsByRepo(
-    resolved.filter((project) => project.repo.length > 0),
-  );
+  const known = resolved.filter((project) => project.repo.length > 0);
 
   if (query.assignedToMe) {
+    // To-Dos are one account-wide request; every project only maps repos back.
+    const grouped = groupProjectsByRepo(known);
     const localPathByRepo = new Map(
       grouped.map((project) => [project.repo.toLowerCase(), project.path]),
     );
@@ -913,6 +1011,9 @@ async function fetchRepositoryInboxItems(
     return collectInboxResults(await Promise.allSettled(jobs), preferredPaths);
   }
 
+  const grouped = groupProjectsByRepo(
+    skipHiddenProjects(known, query, provider),
+  );
   const jobs = grouped.flatMap((project) =>
     (["issue", "pr"] as const).map(async (kind) => {
       const items = await listWorkItems(project.path, {
@@ -1079,6 +1180,43 @@ export function groupProjectsByRepo(
     });
   }
   return grouped;
+}
+
+/**
+ * Drops hidden projects before repositories are grouped, so a repository that
+ * is also checked out in a visible project is still fetched for that one.
+ */
+export function skipHiddenProjects(
+  resolved: readonly { path: string; repo: string }[],
+  query: Pick<InboxQuery, "hiddenProjects" | "featuredKeys">,
+  provider: InboxProvider,
+): { path: string; repo: string }[] {
+  const hidden = new Set(
+    (query.hiddenProjects ?? []).map(normalizeProjectPath),
+  );
+  if (hidden.size === 0) return [...resolved];
+  const featured = featuredRepos(query.featuredKeys ?? [], provider);
+  return resolved.filter(
+    (project) =>
+      !hidden.has(normalizeProjectPath(project.path)) ||
+      featured.has(project.repo.trim().toLowerCase()),
+  );
+}
+
+/** Repositories named by featured keys, which are `provider:repo:kind:number`. */
+function featuredRepos(
+  keys: readonly string[],
+  provider: InboxProvider,
+): Set<string> {
+  const repos = new Set<string>();
+  const prefix = `${provider}:`;
+  for (const key of keys) {
+    if (!key.startsWith(prefix)) continue;
+    const parts = key.slice(prefix.length).split(":");
+    if (parts.length < 3) continue;
+    repos.add(parts.slice(0, -2).join(":").toLowerCase());
+  }
+  return repos;
 }
 
 export function collectInboxResults(
