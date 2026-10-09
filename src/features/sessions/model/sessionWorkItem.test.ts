@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearInboxCache,
+  githubIssueAction,
   githubPrAction,
   githubWorkItem,
   inboxItemKey,
@@ -176,6 +177,38 @@ describe("session work items", () => {
       repo: "openai/codex",
       number: 42,
       action: "squash",
+    });
+  });
+
+  it("runs an issue action and caches the refreshed result", async () => {
+    const closed: GithubWorkItem = {
+      kind: "issue",
+      repo: "openai/codex",
+      number: 7,
+      title: "Inbox close button",
+      url: "https://github.com/openai/codex/issues/7",
+      state: "closed",
+      stateReason: "completed",
+      updatedAt: "2026-09-09T12:05:00Z",
+      labels: [],
+      assignees: [],
+      draft: false,
+    };
+    vi.mocked(invoke).mockResolvedValue(closed);
+
+    await expect(
+      githubIssueAction("/tmp/codex", "openai/codex", 7, "close"),
+    ).resolves.toEqual(closed);
+    await expect(
+      githubWorkItem("/tmp/codex", "openai/codex", "issue", 7),
+    ).resolves.toEqual(closed);
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith("git_github_issue_action", {
+      cwd: "/tmp/codex",
+      repo: "openai/codex",
+      number: 7,
+      action: "close",
     });
   });
 

@@ -45,6 +45,7 @@ import { isGithubDotcom } from "./githubHost";
 export type GithubTaskKind = "issue" | "pr";
 export type GithubPrAction =
   "merge" | "squash" | "rebase" | "draft" | "ready" | "close" | "reopen";
+export type GithubIssueAction = "close" | "reopen";
 export type InboxKind = GithubTaskKind | "linear" | "jira";
 
 export type GithubLabel = {
@@ -565,14 +566,40 @@ export async function githubPrAction(
     number,
     action,
   });
-  const key = workItemLookupKey(repo, "pr", number);
-  workItemByKey.set(key, item);
+  applyGithubWorkItemChange(repo, "pr", number, item);
+  return item;
+}
+
+/** Close or reopen an issue and return GitHub's fresh issue state. */
+export async function githubIssueAction(
+  cwd: string,
+  repo: string,
+  number: number,
+  action: GithubIssueAction,
+): Promise<GithubWorkItem> {
+  const item = await invoke<GithubWorkItem>("git_github_issue_action", {
+    cwd,
+    repo,
+    number,
+    action,
+  });
+  applyGithubWorkItemChange(repo, "issue", number, item);
+  return item;
+}
+
+function applyGithubWorkItemChange(
+  repo: string,
+  kind: GithubTaskKind,
+  number: number,
+  item: GithubWorkItem,
+) {
+  workItemByKey.set(workItemLookupKey(repo, kind, number), item);
   if (inboxListCache) {
     inboxListCache = {
       ...inboxListCache,
       items: inboxListCache.items.map((cached) =>
         cached.provider === "github" &&
-        cached.kind === "pr" &&
+        cached.kind === kind &&
         cached.repo.toLowerCase() === repo.trim().toLowerCase() &&
         cached.number === number
           ? { ...cached, ...item }
@@ -580,8 +607,7 @@ export async function githubPrAction(
       ),
     };
   }
-  recordInboxSelfActivity({ provider: "github", kind: "pr", repo, number });
-  return item;
+  recordInboxSelfActivity({ provider: "github", kind, repo, number });
 }
 
 export function githubReviewDecisionLabel(decision: string): string {
