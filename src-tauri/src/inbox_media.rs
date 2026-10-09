@@ -28,19 +28,20 @@ pub async fn fetch_inbox_media(url: String) -> Result<tauri::ipc::Response, Stri
 }
 
 fn fetch_inbox_media_sync(url: &str) -> Result<Vec<u8>, String> {
-    let mut current = parse_allowed_media_url(url)?;
-    let token = if github_auth_host(&current.host) {
-        github_auth_token()
-    } else {
-        None
-    };
+    let enterprise = enterprise_host();
+    let enterprise = enterprise.as_deref();
+    let mut current = parse_allowed_media_url(url, enterprise)?;
+    // The token belongs to the site host the URL started on, and is only ever
+    // sent back to that same host.
+    let token_host = github_site_host(&current.host, enterprise).map(str::to_string);
+    let token = token_host.as_deref().and_then(github_auth_token);
     let agent = ureq::AgentBuilder::new()
         .timeout(HTTP_TIMEOUT)
         .redirects(0)
         .build();
 
     for _ in 0..MAX_REDIRECTS {
-        if !is_allowed_media_target(&current) {
+        if !is_allowed_media_target(&current, enterprise) {
             return Err("That media host is not allowed".into());
         }
         let mut request = agent
@@ -48,7 +49,7 @@ fn fetch_inbox_media_sync(url: &str) -> Result<Vec<u8>, String> {
             .set("Accept", "image/*,video/*,*/*;q=0.1")
             .set("User-Agent", USER_AGENT);
         if let Some(token) = token.as_ref() {
-            if github_auth_host(&current.host) {
+            if github_site_host(&current.host, enterprise) == token_host.as_deref() {
                 request = request.set("Authorization", &format!("Bearer {token}"));
             }
         }
@@ -130,9 +131,9 @@ fn too_large() -> String {
     )
 }
 
-fn parse_allowed_media_url(raw: &str) -> Result<MediaUrl, String> {
+fn parse_allowed_media_url(raw: &str, enterprise: Option<&str>) -> Result<MediaUrl, String> {
     let parsed = parse_https_url(raw)?;
-    if !is_allowed_media_target(&parsed) {
+    if !is_allowed_media_target(&parsed, enterprise) {
         return Err("That media host is not allowed".into());
     }
     Ok(parsed)
@@ -208,11 +209,43 @@ fn redirect_target(base: &str, location: &str) -> Result<MediaUrl, String> {
     parse_https_url(&joined)
 }
 
-fn is_allowed_media_target(url: &MediaUrl) -> bool {
-    if is_github_site(&url.host) {
-        return is_github_attachment_path(&url.path);
+/// The configured GitHub Enterprise host, or `None` on github.com.
+fn enterprise_host() -> Option<String> {
+    let host = crate::github_host::current();
+    (!crate::github_host::is_dotcom(&host)).then_some(host)
+}
+
+fn is_allowed_media_target(url: &MediaUrl, enterprise: Option<&str>) -> bool {
+    if let Some(site) = github_site_host(&url.host, enterprise) {
+        return is_github_attachment_path(&url.path)
+            || (Some(site) == enterprise && is_enterprise_storage_path(&url.path));
+    }
+    if enterprise.is_some_and(|host| is_enterprise_media_host(&url.host, host)) {
+        return true;
     }
     is_github_media_cdn(&url.host) || is_linear_uploads(&url.host) || is_github_asset_s3(&url.host)
+}
+
+/// `github.com` or the Enterprise host when `host` is that site (with or
+/// without `www.`), so the caller knows which `gh` login it belongs to.
+fn github_site_host<'a>(host: &str, enterprise: Option<&'a str>) -> Option<&'a str> {
+    if is_github_site(host) {
+        return Some(crate::github_host::DEFAULT_GITHUB_HOST);
+    }
+    let enterprise = enterprise?;
+    let bare = host.strip_prefix("www.").unwrap_or(host);
+    (bare == enterprise).then_some(enterprise)
+}
+
+/// GHES with subdomain isolation serves uploads from `media.<host>`; the
+/// `/user-attachments/` URL redirects there with a signed `?token=`.
+fn is_enterprise_media_host(host: &str, enterprise: &str) -> bool {
+    host.strip_prefix("media.") == Some(enterprise)
+}
+
+/// Without subdomain isolation GHES serves the same uploads from `/storage/`.
+fn is_enterprise_storage_path(path: &str) -> bool {
+    path.to_ascii_lowercase().starts_with("/storage/")
 }
 
 fn is_github_attachment_path(path: &str) -> bool {
@@ -245,11 +278,6 @@ fn is_github_asset_s3(host: &str) -> bool {
         || host.starts_with("github-production-media-"))
 }
 
-fn github_auth_host(host: &str) -> bool {
-    // JWT-signed githubusercontent URLs reject an extra Authorization header.
-    is_github_site(host)
-}
-
 fn is_redirect(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
 }
@@ -261,13 +289,14 @@ fn path_has_dotdot(path: &str) -> bool {
     })
 }
 
-fn github_auth_token() -> Option<String> {
+fn github_auth_token(host: &str) -> Option<String> {
     let program = crate::harness::resolve_gui_binary("gh")?;
     let home = dirs_home()?;
     let mut cmd = Command::new(program);
     cmd.current_dir(&home)
-        // Media hosts are github.com's; never send a GitHub Enterprise token there.
-        .args(["auth", "token", "--hostname", "github.com"])
+        // Only the site host gets a token: JWT-signed githubusercontent URLs
+        // reject an extra Authorization header, and media CDNs need none.
+        .args(["auth", "token", "--hostname", host])
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PAGER", "cat");
     crate::harness::apply_gui_env(&mut cmd);
@@ -288,21 +317,64 @@ fn github_auth_token() -> Option<String> {
 mod tests {
     use super::*;
 
+    const GHES: Option<&str> = Some("oss.example.com");
+
+    fn parse_allowed_media_url_dotcom(raw: &str) -> Result<MediaUrl, String> {
+        parse_allowed_media_url(raw, None)
+    }
+
+    #[test]
+    fn enterprise_attachments_are_allowed_only_when_configured() {
+        for url in [
+            "https://oss.example.com/user-attachments/assets/aaaaaaaa-bbbb",
+            "https://oss.example.com/acme/web/assets/12/aaaaaaaa-bbbb",
+            "https://oss.example.com/storage/user/12/files/aaaaaaaa-bbbb",
+            "https://media.oss.example.com/user/12/files/aaaaaaaa-bbbb?token=x",
+        ] {
+            assert!(parse_allowed_media_url(url, GHES).is_ok(), "{url}");
+            assert!(parse_allowed_media_url(url, None).is_err(), "{url}");
+        }
+        assert!(
+            parse_allowed_media_url("https://oss.example.com/acme/web/issues/1", GHES).is_err()
+        );
+        assert!(
+            parse_allowed_media_url("https://github.com/storage/user/1/files/x", GHES).is_err()
+        );
+        assert!(
+            parse_allowed_media_url("https://media.evil.example/user/1/files/x", GHES).is_err()
+        );
+        assert!(parse_allowed_media_url("https://x.media.oss.example.com/user/1", GHES).is_err());
+    }
+
+    #[test]
+    fn site_host_names_the_token_login() {
+        assert_eq!(github_site_host("github.com", GHES), Some("github.com"));
+        assert_eq!(
+            github_site_host("www.oss.example.com", GHES),
+            Some("oss.example.com")
+        );
+        assert_eq!(github_site_host("oss.example.com", None), None);
+        assert_eq!(github_site_host("media.oss.example.com", GHES), None);
+    }
+
     #[test]
     fn github_and_linear_attachments_are_allowed() {
-        assert!(parse_allowed_media_url(
+        assert!(parse_allowed_media_url_dotcom(
             "https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         )
         .is_ok());
+        assert!(parse_allowed_media_url_dotcom(
+            "https://user-images.githubusercontent.com/1/shot.png"
+        )
+        .is_ok());
         assert!(
-            parse_allowed_media_url("https://user-images.githubusercontent.com/1/shot.png").is_ok()
+            parse_allowed_media_url_dotcom("https://uploads.linear.app/org/uuid/file.png").is_ok()
         );
-        assert!(parse_allowed_media_url("https://uploads.linear.app/org/uuid/file.png").is_ok());
-        assert!(parse_allowed_media_url(
+        assert!(parse_allowed_media_url_dotcom(
             "https://github-production-user-asset-6210df.s3.amazonaws.com/1/shot.png"
         )
         .is_ok());
-        assert!(parse_allowed_media_url(
+        assert!(parse_allowed_media_url_dotcom(
             "https://github.com/acme/web/assets/12/aaaaaaaa-bbbb-cccc"
         )
         .is_ok());
@@ -310,16 +382,20 @@ mod tests {
 
     #[test]
     fn github_pages_other_hosts_and_traversal_are_rejected() {
-        assert!(parse_allowed_media_url("https://github.com/acme/web/issues/1").is_err());
-        assert!(parse_allowed_media_url("https://github.com/acme/web/assets").is_err());
-        assert!(parse_allowed_media_url("https://github.com/user-attachments/../login").is_err());
-        assert!(parse_allowed_media_url("http://github.com/user-attachments/assets/x").is_err());
-        assert!(parse_allowed_media_url("https://evil.example/shot.png").is_err());
-        assert!(parse_allowed_media_url(
+        assert!(parse_allowed_media_url_dotcom("https://github.com/acme/web/issues/1").is_err());
+        assert!(parse_allowed_media_url_dotcom("https://github.com/acme/web/assets").is_err());
+        assert!(
+            parse_allowed_media_url_dotcom("https://github.com/user-attachments/../login").is_err()
+        );
+        assert!(
+            parse_allowed_media_url_dotcom("http://github.com/user-attachments/assets/x").is_err()
+        );
+        assert!(parse_allowed_media_url_dotcom("https://evil.example/shot.png").is_err());
+        assert!(parse_allowed_media_url_dotcom(
             "https://github.com@evil.example/user-attachments/assets/x"
         )
         .is_err());
-        assert!(parse_allowed_media_url("https://127.0.0.1/shot.png").is_err());
+        assert!(parse_allowed_media_url_dotcom("https://127.0.0.1/shot.png").is_err());
     }
 
     #[test]
@@ -340,7 +416,8 @@ mod tests {
                 "https://github.com/user-attachments/assets/abcd",
                 "https://evil.example/shot.png"
             )
-            .unwrap()
+            .unwrap(),
+            None
         ));
         assert!(redirect_target(
             "https://github.com/user-attachments/assets/abcd",

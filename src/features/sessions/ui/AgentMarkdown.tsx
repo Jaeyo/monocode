@@ -43,7 +43,8 @@ import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { openPathWithDefaultApp, revealPath } from "../../../platform/tauri/fs";
-import { INBOX_MEDIA_PREFIXES, isInboxMediaUrl } from "../../inbox/model/inboxMedia";
+import { getGithubHost } from "../../inbox/model/githubHost";
+import { inboxMediaPrefixes, isInboxMediaUrl } from "../../inbox/model/inboxMedia";
 import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { InboxMedia } from "../../inbox/ui/InboxMedia";
@@ -81,29 +82,39 @@ const MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   ],
 ];
 
-const INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
-  defaultRehypePlugins.raw,
-  defaultRehypePlugins.sanitize,
-  [
-    harden,
-    {
-      defaultOrigin: "https://inbox.invalid",
-      allowedImagePrefixes: INBOX_MEDIA_PREFIXES,
-      allowedLinkPrefixes: ["*"],
-      allowDataImages: true,
-      imageBlockPolicy: "remove" as const,
-    },
-  ],
-];
+// Issue/PR markdown keeps only images on the attachment hosts of github.com,
+// Linear and the configured GitHub Enterprise host. Built once per host.
+const inboxMediaRehypeCache = new Map<
+  string,
+  { plain: PluggableList; fading: PluggableList }
+>();
+
+function inboxMediaRehypePlugins(host: string, fading: boolean): PluggableList {
+  let plugins = inboxMediaRehypeCache.get(host);
+  if (!plugins) {
+    const plain: PluggableList = [
+      defaultRehypePlugins.raw,
+      defaultRehypePlugins.sanitize,
+      [
+        harden,
+        {
+          defaultOrigin: "https://inbox.invalid",
+          allowedImagePrefixes: inboxMediaPrefixes(host),
+          allowedLinkPrefixes: ["*"],
+          allowDataImages: true,
+          imageBlockPolicy: "remove" as const,
+        },
+      ],
+    ];
+    plugins = { plain, fading: [...plain, rehypeWordFade] };
+    inboxMediaRehypeCache.set(host, plugins);
+  }
+  return fading ? plugins.fading : plugins.plain;
+}
 
 // A reply that streams renders its words as spans that fade in as they land.
 const FADING_MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   ...MARKDOWN_REHYPE_PLUGINS,
-  rehypeWordFade,
-];
-
-const FADING_INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
-  ...INBOX_MEDIA_REHYPE_PLUGINS,
   rehypeWordFade,
 ];
 
@@ -551,12 +562,10 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   // element. Dropping one mid-fade would remount it and fade it again. Once
   // the fade is over they come off, or a finished reply would keep a span per
   // word for as long as this transcript stays mounted.
-  const baseRehypePlugins = fading
-    ? remoteMedia
-      ? FADING_INBOX_MEDIA_REHYPE_PLUGINS
-      : FADING_MARKDOWN_REHYPE_PLUGINS
-    : remoteMedia
-      ? INBOX_MEDIA_REHYPE_PLUGINS
+  const baseRehypePlugins = remoteMedia
+    ? inboxMediaRehypePlugins(getGithubHost(), fading)
+    : fading
+      ? FADING_MARKDOWN_REHYPE_PLUGINS
       : MARKDOWN_REHYPE_PLUGINS;
   // Hard breaks go last, so nothing after them undoes them, and after the word
   // fade, whose word spans would otherwise hide the newlines from them.

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { sniffImageMime } from "../../files/model/filePreview";
+import { getGithubHost, isGithubDotcom } from "./githubHost";
 
 /**
  * Prefixes rehype-harden will keep on issue/PR markdown. The fetcher still
@@ -20,6 +21,21 @@ export const INBOX_MEDIA_PREFIXES = [
   "https://uploads.linear.app/",
 ];
 
+/**
+ * {@link INBOX_MEDIA_PREFIXES} plus the attachment URLs of the configured
+ * GitHub Enterprise host: `<host>/user-attachments/`, `<host>/storage/` and
+ * the `media.<host>` subdomain its private-mode uploads are served from.
+ */
+export function inboxMediaPrefixes(host = getGithubHost()): string[] {
+  if (isGithubDotcom(host)) return INBOX_MEDIA_PREFIXES;
+  return [
+    ...INBOX_MEDIA_PREFIXES,
+    `https://${host}/user-attachments/`,
+    `https://${host}/storage/`,
+    `https://media.${host}/`,
+  ];
+}
+
 export type InboxMediaKind = "image" | "video";
 export type InboxMediaType = { kind: InboxMediaKind; mime: string };
 
@@ -31,7 +47,10 @@ const mediaRequests = new Map<string, Promise<Uint8Array>>();
 let mediaCacheBytes = 0;
 
 /** Remote image/video URLs GitHub and Linear actually put in issue bodies. */
-export function isInboxMediaUrl(value: string): boolean {
+export function isInboxMediaUrl(
+  value: string,
+  githubHost = getGithubHost(),
+): boolean {
   let url: URL;
   try {
     url = new URL(value.trim());
@@ -51,9 +70,15 @@ export function isInboxMediaUrl(value: string): boolean {
   ) {
     return true;
   }
-  if (host !== "github.com" && host !== "www.github.com") return false;
+  const enterprise = isGithubDotcom(githubHost) ? null : githubHost;
+  if (enterprise && host === `media.${enterprise}`) return true;
+  const bare = host.startsWith("www.") ? host.slice(4) : host;
+  if (bare !== "github.com" && bare !== enterprise) return false;
   const path = url.pathname.toLowerCase();
   if (path.startsWith("/user-attachments/")) return true;
+  if (enterprise && bare === enterprise && path.startsWith("/storage/")) {
+    return true;
+  }
   const parts = path.split("/").filter(Boolean);
   return (
     parts.length >= 4 &&

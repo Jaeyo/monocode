@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   INBOX_MEDIA_PREFIXES,
+  inboxMediaPrefixes,
   isInboxMediaUrl,
   sniffInboxMedia,
 } from "./inboxMedia";
@@ -35,6 +36,54 @@ describe("isInboxMediaUrl", () => {
     expect(
       isInboxMediaUrl("https://github.com.evil.com/user-attachments/assets/x"),
     ).toBe(false);
+  });
+});
+
+describe("isInboxMediaUrl on GitHub Enterprise", () => {
+  const host = "oss.example.com";
+
+  it("allows the configured host's attachments and media subdomain", () => {
+    for (const url of [
+      "https://oss.example.com/user-attachments/assets/aaaaaaaa-bbbb",
+      "https://oss.example.com/acme/web/assets/12/aaaaaaaa-bbbb",
+      "https://oss.example.com/storage/user/12/files/aaaaaaaa-bbbb",
+      "https://media.oss.example.com/user/12/files/aaaaaaaa-bbbb",
+    ]) {
+      expect(isInboxMediaUrl(url, host)).toBe(true);
+      expect(isInboxMediaUrl(url, "github.com")).toBe(false);
+    }
+    expect(
+      isInboxMediaUrl("https://github.com/user-attachments/assets/x", host),
+    ).toBe(true);
+  });
+
+  it("rejects the host's pages and lookalike hosts", () => {
+    expect(
+      isInboxMediaUrl("https://oss.example.com/acme/web/issues/1", host),
+    ).toBe(false);
+    expect(
+      isInboxMediaUrl("https://github.com/storage/user/1/files/x", host),
+    ).toBe(false);
+    expect(
+      isInboxMediaUrl("https://x.media.oss.example.com/user/1/files/x", host),
+    ).toBe(false);
+    expect(
+      isInboxMediaUrl(
+        "https://oss.example.com.evil.com/user-attachments/x",
+        host,
+      ),
+    ).toBe(false);
+  });
+
+  it("adds the host's attachment prefixes for the sanitizer", () => {
+    expect(inboxMediaPrefixes("github.com")).toEqual(INBOX_MEDIA_PREFIXES);
+    expect(inboxMediaPrefixes(host)).toEqual(
+      expect.arrayContaining([
+        "https://oss.example.com/user-attachments/",
+        "https://oss.example.com/storage/",
+        "https://media.oss.example.com/",
+      ]),
+    );
   });
 });
 
