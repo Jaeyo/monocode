@@ -50,7 +50,9 @@ describe.each([
     vi.mocked(invoke).mockReset();
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "git_github_repositories") return ["github/repo"];
-      if (command === "git_github_work_items") return [];
+      if (command === "git_github_inbox_items") {
+        return { repos: [], viewer: "", rateLimit: null };
+      }
       if (command === `${commandPrefix}_status`) return { connected };
       if (
         command === "linear_status" ||

@@ -116,10 +116,18 @@ describe("Jira inbox", () => {
       if (command === "jira_status")
         throw new Error("Jira settings are invalid");
       if (command === "git_github_repositories") return ["acme/web"];
-      if (command === "git_github_work_items") {
-        return (args as { kind: string }).kind === "issue"
-          ? [{ ...issue, kind: "issue", repo: "acme/web" }]
-          : [];
+      if (command === "git_github_inbox_items") {
+        return {
+          repos: [
+            {
+              repo: "acme/web",
+              items: [{ ...issue, kind: "issue", repo: "acme/web" }],
+              latestUpdatedAt: "",
+            },
+          ],
+          viewer: "",
+          rateLimit: null,
+        };
       }
       return original(command, args);
     });

@@ -10,6 +10,7 @@ import {
   listInboxItems,
   peekGithubWorkItemDetails,
   skipHiddenProjects,
+  type GithubInboxRepo,
   type GithubWorkItem,
 } from "./githubTasks";
 
@@ -32,6 +33,16 @@ function workItem(repo: string, kind: "issue" | "pr"): GithubWorkItem {
     assignees: [],
     draft: false,
     repo,
+  };
+}
+
+function batch(repos: { repo: string; items: GithubWorkItem[] }[]) {
+  return {
+    repos: repos.map(
+      (entry): GithubInboxRepo => ({ ...entry, latestUpdatedAt: "" }),
+    ),
+    viewer: "maya",
+    rateLimit: null,
   };
 }
 
@@ -64,13 +75,16 @@ describe("GitHub fork repositories", () => {
             : ["lin/web", "ACME/web"]
         ) as never;
       }
-      if (command === "git_github_work_items") {
-        const repo = String(input?.repo ?? "");
-        const kind = input?.kind as "issue" | "pr";
-        return (
-          repo.toLowerCase() === "acme/web" && kind === "issue"
-            ? [workItem("acme/web", kind)]
-            : []
+      if (command === "git_github_inbox_items") {
+        const repos = input?.repos as string[];
+        return batch(
+          repos.map((repo) => ({
+            repo,
+            items:
+              repo.toLowerCase() === "acme/web"
+                ? [workItem("acme/web", "issue")]
+                : [],
+          })),
         ) as never;
       }
       if (
@@ -96,15 +110,47 @@ describe("GitHub fork repositories", () => {
     });
     const listCalls = vi
       .mocked(invoke)
-      .mock.calls.filter(([command]) => command === "git_github_work_items");
-    expect(listCalls).toHaveLength(6);
-    expect(
-      listCalls.filter(
-        ([, args]) =>
-          String((args as Record<string, unknown>).repo).toLowerCase() ===
-          "acme/web",
-      ),
-    ).toHaveLength(2);
+      .mock.calls.filter(([command]) => command === "git_github_inbox_items");
+    expect(listCalls).toHaveLength(1);
+    expect((listCalls[0]![1] as { repos: string[] }).repos).toEqual([
+      "maya/web",
+      "acme/web",
+      "lin/web",
+    ]);
+  });
+
+  it("keeps the repositories that answered when one fails", async () => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      const input = args as Record<string, unknown> | undefined;
+      if (command === "git_github_repositories") {
+        return [input?.cwd === "/tmp/web" ? "acme/web" : "acme/gone"] as never;
+      }
+      if (command === "git_github_inbox_items") {
+        const listed = batch([
+          { repo: "acme/web", items: [workItem("acme/web", "pr")] },
+        ]);
+        listed.repos.push({
+          repo: "acme/gone",
+          items: [],
+          latestUpdatedAt: "",
+          error: "Could not resolve to a Repository",
+        });
+        return listed as never;
+      }
+      return { connected: false } as never;
+    });
+
+    const result = await listInboxItems(
+      [{ path: "/tmp/web" }, { path: "/tmp/gone" }],
+      { assignedToMe: false, state: "open", search: "" },
+    );
+    expect(result.errors).toEqual({});
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({
+      repo: "acme/web",
+      projectPath: "/tmp/web",
+      provider: "github",
+    });
   });
 
   it("reports an error when repository discovery fails", async () => {
@@ -139,12 +185,17 @@ describe("GitHub fork repositories", () => {
     let limited = false;
     const projects = [{ path: "/tmp/web" }];
     const query = { assignedToMe: false, state: "open", search: "" } as const;
-    vi.mocked(invoke).mockImplementation(async (command, args) => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "git_github_repositories") return ["acme/web"];
-      if (command === "git_github_work_items") {
+      if (command === "git_github_inbox_items") {
         if (limited)
           throw new Error("GraphQL: API rate limit already exceeded");
-        return [workItem("acme/web", (args as { kind: "issue" | "pr" }).kind)];
+        return batch([
+          {
+            repo: "acme/web",
+            items: [workItem("acme/web", "issue"), workItem("acme/web", "pr")],
+          },
+        ]);
       }
       return { connected: false };
     });
@@ -248,7 +299,7 @@ describe("hidden Inbox projects", () => {
               : "acme/web",
         ] as never;
       }
-      if (command === "git_github_work_items") return [] as never;
+      if (command === "git_github_inbox_items") return batch([]) as never;
       if (
         command === "linear_status" ||
         command === "jira_status" ||
@@ -271,13 +322,13 @@ describe("hidden Inbox projects", () => {
       },
     );
 
-    const fetched = new Set(
-      vi
-        .mocked(invoke)
-        .mock.calls.filter(([command]) => command === "git_github_work_items")
-        .map(([, args]) => (args as Record<string, unknown>).repo),
-    );
-    expect(fetched).toEqual(new Set(["acme/web", "acme/docs"]));
+    const [, args] = vi
+      .mocked(invoke)
+      .mock.calls.find(([command]) => command === "git_github_inbox_items")!;
+    expect((args as { repos: string[] }).repos).toEqual([
+      "acme/web",
+      "acme/docs",
+    ]);
   });
 
   it("still fetch a repository that a visible project also checks out", () => {

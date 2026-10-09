@@ -324,18 +324,37 @@ export async function githubRepositories(cwd: string): Promise<string[]> {
   return repositories;
 }
 
-export function listGithubWorkItems(
-  cwd: string,
-  repo: string,
-  query: GithubWorkItemQuery,
-): Promise<GithubWorkItem[]> {
-  return invoke<GithubWorkItem[]>("git_github_work_items", {
-    cwd,
-    repo,
-    kind: query.kind,
+export type GithubRateLimit = {
+  limit: number;
+  remaining: number;
+  resetAt: string;
+  /** Points the batch spent. */
+  cost: number;
+};
+
+export type GithubInboxRepo = {
+  repo: string;
+  items: GithubWorkItem[];
+  /** Newest activity in the repository in any state; empty when unknown. */
+  latestUpdatedAt: string;
+  error?: string | null;
+};
+
+export type GithubInboxBatch = {
+  repos: GithubInboxRepo[];
+  viewer: string;
+  rateLimit: GithubRateLimit | null;
+};
+
+/** Issues and pull requests for many repositories in a few GraphQL requests. */
+export function listGithubInboxItems(
+  repos: readonly string[],
+  query: Pick<InboxQuery, "assignedToMe" | "state">,
+): Promise<GithubInboxBatch> {
+  return invoke<GithubInboxBatch>("git_github_inbox_items", {
+    repos,
     assignedToMe: query.assignedToMe,
     state: query.state,
-    search: query.search.trim(),
     limit: query.state === "all" ? INBOX_ALL_LIMIT : undefined,
   });
 }
@@ -789,25 +808,11 @@ async function fetchInboxItems(
   const grouped = groupProjectsByRepo(
     skipHiddenProjects(resolved, query, "github"),
   );
-  const githubJobs = grouped.flatMap((project) =>
-    (["issue", "pr"] as const).map(async (kind) => {
-      const items = await listGithubWorkItems(project.path, project.repo, {
-        ...query,
-        kind,
-      });
-      return items.map((item) => ({
-        ...item,
-        projectPath: project.path,
-        provider: "github" as const,
-        repo: item.repo || project.repo,
-      }));
-    }),
-  );
   const discoveryFailures = discovery.filter(
     (result): result is PromiseRejectedResult => result.status === "rejected",
   );
   const github = collectInboxResults(
-    [...(await Promise.allSettled(githubJobs)), ...discoveryFailures],
+    [...(await githubInboxResults(grouped, query)), ...discoveryFailures],
     preferredPaths,
   );
   const errors: InboxProviderErrors = {};
@@ -868,6 +873,41 @@ async function fetchInboxItems(
     ),
     errors,
   };
+}
+
+/** One settled result per repository, so a failed one cannot hide the rest. */
+async function githubInboxResults(
+  projects: readonly { path: string; repo: string }[],
+  query: InboxQuery,
+): Promise<PromiseSettledResult<InboxItem[]>[]> {
+  if (projects.length === 0) return [];
+  let batch: GithubInboxBatch;
+  try {
+    batch = await listGithubInboxItems(
+      projects.map((project) => project.repo),
+      query,
+    );
+  } catch (error) {
+    return [{ status: "rejected", reason: error }];
+  }
+  const pathByRepo = new Map(
+    projects.map((project) => [project.repo.toLowerCase(), project.path]),
+  );
+  return batch.repos.map((entry) => {
+    if (entry.error) {
+      return { status: "rejected", reason: new Error(entry.error) };
+    }
+    const projectPath = pathByRepo.get(entry.repo.toLowerCase()) ?? "";
+    return {
+      status: "fulfilled",
+      value: entry.items.map((item) => ({
+        ...item,
+        projectPath,
+        provider: "github" as const,
+        repo: item.repo || entry.repo,
+      })),
+    };
+  });
 }
 
 async function fetchRepositoryInboxItems(
