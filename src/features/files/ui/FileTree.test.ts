@@ -547,3 +547,83 @@ describe("FileTree keyboard navigation", () => {
     expect(selected()).toBe(`${cwd}/src`);
   });
 });
+
+describe("FileTree extra roots", () => {
+  let extra: string;
+
+  function menuItem(label: string) {
+    return [
+      ...document.querySelectorAll<HTMLButtonElement>("[role='menuitem']"),
+    ].find((item) => item.textContent?.includes(label));
+  }
+
+  function openMenu(el: HTMLElement) {
+    return act(async () => {
+      el.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      );
+    });
+  }
+
+  beforeEach(async () => {
+    extra = `/module-${project}`;
+    directories.set(extra, [
+      { name: "lib.ts", path: `${extra}/lib.ts`, isDir: false, ignored: false },
+    ]);
+    await listCachedDir(extra);
+    saveExpanded(cwd, new Set([cwd]));
+    props = { ...props, extraRoots: [extra], onRemoveRoot: vi.fn() };
+    await act(async () => render());
+  });
+
+  it("lists each extra root after the project and expands it on click", async () => {
+    const roots = [
+      ...container.querySelectorAll<HTMLButtonElement>("[data-explorer-root]"),
+    ].map((el) => el.title);
+    expect(roots).toEqual([cwd, extra]);
+
+    const extraRow = container.querySelector<HTMLButtonElement>(
+      `[data-explorer-root][title="${extra}"]`,
+    )!;
+    await act(async () => extraRow.click());
+    expect(
+      container.querySelector(`[role="treeitem"][title="${extra}/lib.ts"]`),
+    ).not.toBeNull();
+  });
+
+  it("offers removal for an extra root but not the project", async () => {
+    await openMenu(
+      container.querySelector<HTMLElement>(
+        `[data-explorer-root][title="${cwd}"]`,
+      )!,
+    );
+    expect(menuItem("Remove from Explorer")).toBeUndefined();
+    await act(async () => document.body.click());
+
+    await openMenu(
+      container.querySelector<HTMLElement>(
+        `[data-explorer-root][title="${extra}"]`,
+      )!,
+    );
+    const remove = menuItem("Remove from Explorer");
+    expect(remove).toBeDefined();
+    await act(async () => remove!.click());
+    expect(props.onRemoveRoot).toHaveBeenCalledWith(extra);
+  });
+
+  it("copies paths relative to the root that holds them", async () => {
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          `[data-explorer-root][title="${extra}"]`,
+        )!
+        .click(),
+    );
+    const lib = container.querySelector<HTMLElement>(
+      `[role="treeitem"][title="${extra}/lib.ts"]`,
+    )!;
+    await openMenu(lib);
+    await act(async () => menuItem("Copy Relative Path")!.click());
+    expect(await navigator.clipboard.readText()).toBe("lib.ts");
+  });
+});

@@ -236,6 +236,12 @@ type Props = {
   gitCwd?: string;
   /** Branch identity shown for a worktree whose folder has a temporary name. */
   explorerRootLabel?: string;
+  /** Explorer tree when it should not follow `gitCwd`, such as while a file
+   *  from one of `explorerRoots` is focused. */
+  explorerCwd?: string;
+  /** External repositories listed after the project in the explorer. */
+  explorerRoots?: string[];
+  onRemoveExplorerRoot?: (root: string) => void;
   /** Open tabs per worktree path key, for the worktree switcher. */
   worktreeTabStats?: ReadonlyMap<string, { tabs: number; busy: boolean }>;
   onSelectWorkspace?: (focus?: WorktreeFocus) => void;
@@ -346,6 +352,9 @@ function SidebarComponent({
   cwd,
   gitCwd,
   explorerRootLabel,
+  explorerCwd,
+  explorerRoots,
+  onRemoveExplorerRoot,
   worktreeTabStats,
   onSelectWorkspace,
   workspaceSwitchPending,
@@ -810,11 +819,23 @@ function SidebarComponent({
   const panelOpen = open || drawerVisible;
   // Keep the hidden explorer intact when a chat tab changes worktrees. Its
   // rows and file icons only need rebuilding when Files is actually shown.
-  const explorer = useRef<{ cwd: string; rootLabel?: string } | null>(null);
+  const explorer = useRef<{
+    cwd: string;
+    rootLabel?: string;
+    extraRoots?: string[];
+  } | null>(null);
+  const explorerRoot = (!remoteProject && explorerCwd) || gitRoot;
   if (panelOpen && tab === "files") {
-    explorer.current = { cwd: gitRoot, rootLabel: explorerRootLabel };
+    explorer.current = {
+      cwd: explorerRoot,
+      rootLabel: explorerRootLabel,
+      extraRoots: remoteProject ? undefined : explorerRoots,
+    };
   }
-  const gitStatuses = useGitFileStatuses(gitRoot, panelOpen && tab === "files");
+  const gitStatuses = useGitFileStatuses(
+    explorerRoot,
+    panelOpen && tab === "files",
+  );
   const changeStats = useProjectDiffStats(gitRoot, panelOpen);
 
   useEffect(() => {
@@ -1750,7 +1771,7 @@ function SidebarComponent({
         >
           {filesSearchOpen ? (
             <ProjectSearch
-              cwd={gitRoot}
+              cwd={explorerRoot}
               focusToken={searchFocusToken}
               onOpenFile={onOpenFile}
               onClose={() => onFilesSearchOpenChange(false)}
@@ -1768,6 +1789,8 @@ function SidebarComponent({
                   onFileDeleted={onFileDeleted}
                   onSearch={onOpenFilesSearch}
                   gitStatuses={gitStatuses}
+                  extraRoots={explorer.current.extraRoots}
+                  onRemoveRoot={onRemoveExplorerRoot}
                 />
               ) : null}
             </div>

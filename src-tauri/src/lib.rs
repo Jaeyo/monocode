@@ -510,6 +510,8 @@ pub fn run() {
             checkpoint::session_checkpoint_file_diff,
             checkpoint::session_checkpoint_undo,
             checkpoint::session_checkpoint_keep,
+            checkpoint::session_checkpoint_roots,
+            checkpoint::session_checkpoint_remove_root,
             set_traffic_lights_visible,
             set_window_background_blur,
             set_dock_badge,
