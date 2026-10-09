@@ -41,6 +41,9 @@ pub struct GitHubInboxRepo {
     /// any state, so closing an item also counts as a change.
     pub latest_updated_at: String,
     pub error: Option<String>,
+    /// The request carrying this repository failed, not the repository
+    /// itself, so the caller should keep what it already has.
+    pub retryable: bool,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -151,6 +154,7 @@ fn failed_repo(repo: &str, error: String) -> GitHubInboxRepo {
         items: Vec::new(),
         latest_updated_at: String::new(),
         error: Some(error),
+        retryable: false,
     }
 }
 
@@ -304,11 +308,10 @@ fn merge(
             }
             Err(error) => {
                 first_error.get_or_insert_with(|| error.clone());
-                repos.extend(
-                    chunk
-                        .iter()
-                        .map(|target| failed_repo(&target.repo, error.clone())),
-                );
+                repos.extend(chunk.iter().map(|target| GitHubInboxRepo {
+                    retryable: true,
+                    ..failed_repo(&target.repo, error.clone())
+                }));
             }
         }
     }
@@ -560,6 +563,7 @@ fn parse_response(json: &str, chunk: &[Target]) -> Result<Parsed, String> {
                         items,
                         latest_updated_at: latest([block.latest_issue, block.latest_pr]),
                         error: by_alias.get(&alias).cloned(),
+                        retryable: false,
                     }
                 }
                 Ok(None) => failed_repo(
@@ -700,6 +704,7 @@ fn inbox_assigned(repos: &[String], all: bool, run: Runner) -> Result<GitHubInbo
             // A search cannot say what changed per repository; probes skip this mode.
             latest_updated_at: String::new(),
             error: None,
+            retryable: false,
         }
     }));
     Ok(GitHubInboxBatch {
@@ -879,6 +884,30 @@ mod tests {
         );
         assert!(items.iter().all(|item| item.repo == "acme/web"));
         assert_eq!(batch.rate_limit.unwrap().cost, 6);
+    }
+
+    #[test]
+    fn a_failed_chunk_marks_its_repositories_retryable() {
+        let ok = format!(r#"{{"data":{{"r0":null,{TRAILER_JSON}}}}}"#);
+        let chunks: Vec<Target> = ["a", "b"]
+            .iter()
+            .map(|name| Target {
+                repo: format!("acme/{name}"),
+                owner: "acme".into(),
+                name: name.to_string(),
+            })
+            .collect();
+        let parsed = parse_response(&ok, &chunks[..1]).unwrap();
+        let batch = merge(
+            vec![&chunks[..1], &chunks[1..]],
+            vec![Ok(parsed), Err("HTTP 502".into())],
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(!batch.repos[0].retryable);
+        assert_eq!(batch.repos[1].repo, "acme/b");
+        assert_eq!(batch.repos[1].error.as_deref(), Some("HTTP 502"));
+        assert!(batch.repos[1].retryable);
     }
 
     #[test]

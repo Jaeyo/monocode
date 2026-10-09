@@ -360,6 +360,8 @@ export type GithubInboxRepo = {
   /** Newest activity in the repository in any state; empty when unknown. */
   latestUpdatedAt: string;
   error?: string | null;
+  /** The request failed rather than the repository; keep what is cached. */
+  retryable?: boolean;
 };
 
 export type GithubInboxBatch = {

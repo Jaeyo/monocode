@@ -138,6 +138,22 @@ describe("GitHub Inbox snapshots", () => {
     expect(githubSnapshotsCheckedAt(["acme/web"], OPEN)).toBeNull();
   });
 
+  it("keeps a snapshot when only the request carrying it failed", async () => {
+    const github = fakeGithub({ "acme/web": "t1" });
+    await refreshGithubRepos(["acme/web"], OPEN, github, 0);
+    github.probe.mockResolvedValueOnce(
+      batch([{ repo: "acme/web", latest: "t2" }]),
+    );
+    const failed = batch([{ repo: "acme/web", error: "HTTP 502" }]);
+    failed.repos[0]!.retryable = true;
+    github.list.mockResolvedValueOnce(failed);
+    const result = await refreshGithubRepos(["acme/web"], OPEN, github, 1);
+    expect(result.repos[0]).toEqual({
+      repo: "acme/web",
+      items: [item("acme/web", 1)],
+    });
+  });
+
   it("relists everything when another account answers", async () => {
     const github = fakeGithub({ "acme/web": "t1" });
     await refreshGithubRepos(["acme/web"], OPEN, github, 0);

@@ -288,7 +288,10 @@ export async function refreshGithubRepos(
       for (const entry of entries) {
         const key = snapshotKey(query, entry.repo);
         if (entry.error) {
-          // A repository that can no longer be read must not keep stale items.
+          // A failed request says nothing about the repository: keep its
+          // snapshot for the next refresh. One that can no longer be read
+          // must not keep stale items.
+          if (entry.retryable && snapshots.has(key)) continue;
           snapshots.delete(key);
           errors.set(entry.repo.toLowerCase(), entry.error);
           continue;
