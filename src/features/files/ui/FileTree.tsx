@@ -11,6 +11,7 @@ import {
   memo,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -62,7 +63,12 @@ import {
 import { displayPath, parentPath, rebasePath } from "../../../shared/lib/paths";
 import { IS_MAC, IS_WIN, MOD, SHIFT } from "../../../platform/tauri/platform";
 import type { OpenFileFn } from "../../search/model/search";
-import type { GitStatusMap } from "../../source-control/hooks/useGitFileStatuses";
+import {
+  useGitFileStatuses,
+  type GitStatusMap,
+} from "../../source-control/hooks/useGitFileStatuses";
+import { useProjectBranches } from "../../source-control/hooks/useProjectBranches";
+import { useProjectDiffStats } from "../../source-control/hooks/useProjectDiffStats";
 import {
   emitExplorerFilePointerDrag,
   setGrabbing,
@@ -88,6 +94,10 @@ type Props = {
   onFileDeleted?: (path: string) => void;
   onSearch?: () => void;
   gitStatuses?: GitStatusMap;
+  /** More top-level folders listed after the project, such as repositories
+   *  the session edited outside its cwd. */
+  extraRoots?: string[];
+  onRemoveRoot?: (path: string) => void;
 };
 
 type Creating = { id: number; parent: string; isDir: boolean };
@@ -137,6 +147,20 @@ function useTree(): TreeCtxValue {
   return ctx;
 }
 
+/** The deepest root that holds `path`, falling back to the first root. */
+function rootOf(roots: string[], path: string): string {
+  let best = roots[0];
+  for (const root of roots) {
+    if (
+      (path === root || path.startsWith(`${root}/`)) &&
+      (best === roots[0] || root.length > best.length)
+    ) {
+      best = root;
+    }
+  }
+  return best;
+}
+
 function isDirAt(cwd: string, path: string): boolean {
   if (path === cwd) return true;
   return (
@@ -171,6 +195,7 @@ function explorerItems(
   target: MenuTarget,
   clip: Clip | null,
   canOpenTerminal: boolean,
+  canRemoveRoot: boolean,
 ): ExplorerMenuItem[] {
   const pasteParent = target.isDir ? target.path : parentPath(target.path);
   const pasteBlocked =
@@ -242,6 +267,16 @@ function explorerItems(
         ]
       : []),
     { kind: "item", id: "reveal", label: REVEAL_LABEL },
+    ...(canRemoveRoot
+      ? [
+          { kind: "sep" as const },
+          {
+            kind: "item" as const,
+            id: "remove-root",
+            label: "Remove from Explorer",
+          },
+        ]
+      : []),
   ];
 }
 
@@ -256,6 +291,8 @@ export const FileTree = memo(function FileTree({
   onFileDeleted,
   onSearch,
   gitStatuses,
+  extraRoots,
+  onRemoveRoot,
 }: Props) {
   const [expanded, setExpanded] = useState(() => loadExpanded(cwd));
   const [selectedPath, setSelectedPath] = useState(() => loadSelected(cwd));
@@ -283,6 +320,12 @@ export const FileTree = memo(function FileTree({
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const name = rootLabel?.trim() || basename(cwd);
   const rootOpen = expanded.has(cwd);
+  const roots = useMemo(() => [cwd, ...(extraRoots ?? [])], [cwd, extraRoots]);
+  const hasExtraRoots = roots.length > 1;
+  const isRootPath = (path: string) => roots.includes(path);
+  const rootFor = (path: string) => rootOf(roots, path);
+  const rootsRef = useRef(roots);
+  rootsRef.current = roots;
 
   const toggle = (path: string) => {
     setExpanded((prev) => {
@@ -486,14 +529,15 @@ export const FileTree = memo(function FileTree({
     isDir: boolean,
     atPath: string | null = selectedPath,
   ) => {
-    const parent = createParentOf(cwd, atPath);
+    const root = atPath ? rootFor(atPath) : cwd;
+    const parent = createParentOf(root, atPath);
     setRenaming(null);
-    expandDirs([cwd, parent]);
+    expandDirs([root, parent]);
     setCreating({ id: Date.now(), parent, isDir });
   };
 
   const startRename = (path: string) => {
-    if (path === cwd) return;
+    if (isRootPath(path)) return;
     setCreating(null);
     setMenu(null);
     onSelect(path);
@@ -528,7 +572,7 @@ export const FileTree = memo(function FileTree({
       return;
     }
     const next = await renamePath(path, fileName);
-    const wasDir = isDirAt(cwd, path);
+    const wasDir = isDirAt(rootFor(path), path);
     const parent = parentPath(path);
     await refreshTouched(
       [...dirsTouchedByCreate(parent, fileName), parent],
@@ -541,8 +585,8 @@ export const FileTree = memo(function FileTree({
   };
 
   const removeEntry = async (path: string) => {
-    if (path === cwd) return;
-    const isDir = isDirAt(cwd, path);
+    if (isRootPath(path)) return;
+    const isDir = isDirAt(rootFor(path), path);
     const label = basename(path);
     const ok = window.confirm(
       isDir
@@ -583,7 +627,7 @@ export const FileTree = memo(function FileTree({
   };
 
   const pasteAt = async (targetPath: string) => {
-    const destParent = createParentOf(cwd, targetPath);
+    const destParent = createParentOf(rootFor(targetPath), targetPath);
     if (!clip) {
       await copyExternalFiles(await clipboardFilePaths(), destParent);
       return;
@@ -618,7 +662,7 @@ export const FileTree = memo(function FileTree({
   };
 
   const duplicateAt = async (path: string) => {
-    if (path === cwd) return;
+    if (isRootPath(path)) return;
     const destParent = parentPath(path);
     const created = await copyPath(path, destParent);
     await refreshTouched([destParent]);
@@ -636,7 +680,9 @@ export const FileTree = memo(function FileTree({
   };
 
   const dropFiles = (paths: string[], targetPath: string) =>
-    run(() => copyExternalFiles(paths, createParentOf(cwd, targetPath)));
+    run(() =>
+      copyExternalFiles(paths, createParentOf(rootFor(targetPath), targetPath)),
+    );
   const dropFilesRef = useRef(dropFiles);
   dropFilesRef.current = dropFiles;
 
@@ -673,7 +719,7 @@ export const FileTree = memo(function FileTree({
         await copyText(target.path);
         return;
       case "copy-relative-path":
-        await copyText(displayPath(target.path, cwd));
+        await copyText(displayPath(target.path, rootFor(target.path)));
         return;
       case "rename":
         startRename(target.path);
@@ -686,6 +732,9 @@ export const FileTree = memo(function FileTree({
         return;
       case "open-terminal":
         onOpenTerminal?.(target.isDir ? target.path : parentPath(target.path));
+        return;
+      case "remove-root":
+        onRemoveRoot?.(target.path);
         return;
     }
   };
@@ -737,7 +786,7 @@ export const FileTree = memo(function FileTree({
     }
     const rows = visibleRows();
     const index = rows.findIndex((row) => row.title === path);
-    const open = path === cwd ? rootOpen : expanded.has(path);
+    const open = expanded.has(path);
     const pageSize = () => {
       const scroller = rootRef.current?.querySelector(".overflow-y-auto");
       const rowHeight = rows[rows.length - 1]?.offsetHeight || 30;
@@ -797,7 +846,7 @@ export const FileTree = memo(function FileTree({
         return true;
       case "ArrowLeft":
         if (isDir && open) toggle(path);
-        else if (path !== cwd)
+        else if (!isRootPath(path))
           focusRow(rows.find((row) => row.title === parentPath(path)));
         return true;
       case "Enter":
@@ -822,7 +871,7 @@ export const FileTree = memo(function FileTree({
     const ordered = [...rows.slice(start), ...rows.slice(0, start)];
     const match = ordered.find(
       (row) =>
-        row.title !== cwd &&
+        !isRootPath(row.title) &&
         basename(row.title).toLowerCase().startsWith(needle),
     );
     if (match) focusRow(match);
@@ -840,8 +889,8 @@ export const FileTree = memo(function FileTree({
       return;
     }
     const path = selectedPath ?? cwd;
-    const isRoot = path === cwd;
-    const isDir = isDirAt(cwd, path);
+    const isRoot = isRootPath(path);
+    const isDir = isDirAt(rootFor(path), path);
     if (onNavigationKey(e, path, isDir)) {
       e.preventDefault();
       return;
@@ -901,7 +950,10 @@ export const FileTree = memo(function FileTree({
       const point = dragPointToClient(x, y);
       const el = document.elementFromPoint(point.x, point.y);
       if (!el || !root.contains(el)) return null;
-      return el.closest<HTMLElement>("[role='treeitem']")?.title ?? cwd;
+      return (
+        el.closest<HTMLElement>("[role='treeitem'], [data-explorer-root]")
+          ?.title ?? cwd
+      );
     };
 
     let cancelled = false;
@@ -915,7 +967,11 @@ export const FileTree = memo(function FileTree({
         const { x, y } = event.payload.position;
         const target = treePathAt(x, y);
         if (event.payload.type !== "drop") {
-          setDragOverPath(target ? createParentOf(cwd, target) : null);
+          setDragOverPath(
+            target
+              ? createParentOf(rootOf(rootsRef.current, target), target)
+              : null,
+          );
           return;
         }
         setDragOverPath(null);
@@ -979,6 +1035,44 @@ export const FileTree = memo(function FileTree({
     };
   }, [cwd, epoch]);
 
+  const primaryRow = (
+    <div className="flex h-8 shrink-0 items-center">
+      <button
+        type="button"
+        data-explorer-root
+        aria-expanded={rootOpen}
+        title={cwd}
+        onClick={() => {
+          onSelect(cwd);
+          toggle(cwd);
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openMenu(
+            { path: cwd, isDir: true, isRoot: true },
+            e.clientX,
+            e.clientY,
+          );
+        }}
+        className={`flex min-w-0 flex-1 items-center gap-1 h-full pl-2 text-left outline-none focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-accent/40 ${
+          dragOverPath === cwd ? "bg-selection" : ""
+        }`}
+      >
+        <span className="grid size-4 shrink-0 place-items-center text-content/50">
+          {rootOpen ? (
+            <ChevronDown className="size-3.5" strokeWidth={1.75} />
+          ) : (
+            <ChevronRight className="size-3.5" strokeWidth={1.75} />
+          )}
+        </span>
+        <span className="min-w-0 truncate text-[11px] font-semibold tracking-[0.08em] text-content/50 uppercase">
+          {name}
+        </span>
+      </button>
+    </div>
+  );
+
   return (
     <TreeCtx.Provider
       value={{
@@ -1041,41 +1135,7 @@ export const FileTree = memo(function FileTree({
             </HeaderIcon>
           ) : null}
         </div>
-        <div className="flex h-8 shrink-0 items-center">
-          <button
-            type="button"
-            data-explorer-root
-            aria-expanded={rootOpen}
-            title={cwd}
-            onClick={() => {
-              onSelect(cwd);
-              toggle(cwd);
-            }}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              openMenu(
-                { path: cwd, isDir: true, isRoot: true },
-                e.clientX,
-                e.clientY,
-              );
-            }}
-            className={`flex min-w-0 flex-1 items-center gap-1 h-full pl-2 text-left outline-none focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-accent/40 ${
-              dragOverPath === cwd ? "bg-selection" : ""
-            }`}
-          >
-            <span className="grid size-4 shrink-0 place-items-center text-content/50">
-              {rootOpen ? (
-                <ChevronDown className="size-3.5" strokeWidth={1.75} />
-              ) : (
-                <ChevronRight className="size-3.5" strokeWidth={1.75} />
-              )}
-            </span>
-            <span className="min-w-0 truncate text-[11px] font-semibold tracking-[0.08em] text-content/50 uppercase">
-              {name}
-            </span>
-          </button>
-        </div>
+        {hasExtraRoots ? null : primaryRow}
         <div
           ref={lockOverscroll}
           className="min-h-0 flex-1 overflow-y-auto overscroll-none"
@@ -1085,6 +1145,7 @@ export const FileTree = memo(function FileTree({
               {opError}
             </p>
           ) : null}
+          {hasExtraRoots ? primaryRow : null}
           {rootOpen ? (
             <div role="tree" aria-label={`${name} files`}>
               <TreeChildren
@@ -1096,13 +1157,33 @@ export const FileTree = memo(function FileTree({
               />
             </div>
           ) : null}
+          {roots.slice(1).map((root) => (
+            <ExtraRoot
+              key={root}
+              path={root}
+              onMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openMenu(
+                  { path: root, isDir: true, isRoot: true },
+                  e.clientX,
+                  e.clientY,
+                );
+              }}
+            />
+          ))}
         </div>
       </div>
       {menu ? (
         <ExplorerMenu
           x={menu.x}
           y={menu.y}
-          items={explorerItems(menu.target, clip, !!onOpenTerminal)}
+          items={explorerItems(
+            menu.target,
+            clip,
+            !!onOpenTerminal,
+            !!onRemoveRoot && menu.target.isRoot && menu.target.path !== cwd,
+          )}
           onPick={(id) => {
             const target = menu.target;
             setMenu(null);
@@ -1114,6 +1195,108 @@ export const FileTree = memo(function FileTree({
     </TreeCtx.Provider>
   );
 });
+
+/** A top-level folder beside the project, with its own Git colours, branch
+ *  and changed-file count. */
+function ExtraRoot({
+  path,
+  onMenu,
+}: {
+  path: string;
+  onMenu: (e: ReactMouseEvent) => void;
+}) {
+  const tree = useTree();
+  const open = tree.expanded.has(path);
+  const gitStatuses = useGitFileStatuses(path, true);
+  const branch = useProjectBranches(path, true)?.current;
+  const changed = useProjectDiffStats(path, true)?.files ?? 0;
+  const [entries, setEntries] = useState<FsEntry[] | null>(() => peekDir(path));
+  const [error, setError] = useState<string | null>(null);
+  const name = basename(path);
+
+  useEffect(() => {
+    const hit = peekDir(path);
+    if (hit) {
+      setEntries(hit);
+      setError(null);
+      return;
+    }
+    let cancelled = false;
+    setEntries(null);
+    setError(null);
+    void listCachedDir(path)
+      .then((list) => {
+        if (!cancelled) setEntries(list);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+          setEntries([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [path, tree.epoch]);
+
+  return (
+    <TreeCtx.Provider value={{ ...tree, gitStatuses }}>
+      <div className="flex h-8 shrink-0 items-center">
+        <button
+          type="button"
+          data-explorer-root
+          aria-expanded={open}
+          title={path}
+          onClick={() => {
+            tree.onSelect(path);
+            tree.onToggle(path);
+          }}
+          onContextMenu={onMenu}
+          className={`flex min-w-0 flex-1 items-center gap-1 h-full pl-2 pr-2 text-left outline-none focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-accent/40 ${
+            tree.dragOverPath === path ? "bg-selection" : ""
+          }`}
+        >
+          <span className="grid size-4 shrink-0 place-items-center text-content/50">
+            {open ? (
+              <ChevronDown className="size-3.5" strokeWidth={1.75} />
+            ) : (
+              <ChevronRight className="size-3.5" strokeWidth={1.75} />
+            )}
+          </span>
+          <span className="min-w-0 shrink truncate text-[11px] font-semibold tracking-[0.08em] text-content/50 uppercase">
+            {name}
+          </span>
+          {branch ? (
+            <span className="min-w-0 flex-1 truncate text-[11px] text-content/40">
+              {branch}
+            </span>
+          ) : (
+            <span className="flex-1" />
+          )}
+          {changed > 0 ? (
+            <span
+              className="shrink-0 text-[11px] tabular-nums text-amber-400/80"
+              title={`${changed} changed file${changed === 1 ? "" : "s"}`}
+            >
+              {changed}
+            </span>
+          ) : null}
+        </button>
+      </div>
+      {open ? (
+        <div role="tree" aria-label={`${name} files`}>
+          <TreeChildren
+            parent={path}
+            depth={0}
+            entries={entries}
+            loading={entries === null && !error}
+            error={error}
+          />
+        </div>
+      ) : null}
+    </TreeCtx.Provider>
+  );
+}
 
 function HeaderIcon({
   label,

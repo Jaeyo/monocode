@@ -344,8 +344,10 @@ import {
   keepSessionChanges,
   notifyReviewChanged,
   prepareSessionCheckpoint,
+  removeSessionCheckpointRoot,
   sessionCheckpointCleanupSafe,
 } from "../features/sessions/model/checkpoint";
+import { useSessionRoots } from "../features/sessions/hooks/useSessionRoots";
 import { notifyDirsChanged } from "../features/files/model/fileTree";
 import {
   invalidateWatchedFiles,
@@ -1914,6 +1916,48 @@ function Workspace({
     : gitCwd;
   const gitCwdRef = useRef(filesCwd);
   gitCwdRef.current = filesCwd;
+  // The explorer also lists the external repositories a session edited. A
+  // file tab has no session of its own, so it keeps the roots of the session
+  // its project last focused.
+  const explorerSessions = useRef(new Map<string, string>());
+  if (active) explorerSessions.current.set(pathKey(active.cwd), active.id);
+  const explorerSessionId =
+    active?.id ?? explorerSessions.current.get(pathKey(sidebarCwd));
+  const explorerSession =
+    active ?? sessions.find((session) => session.id === explorerSessionId);
+  const explorerRoots = useSessionRoots(
+    isRemoteProjectPath(sidebarCwd) ? undefined : explorerSessionId,
+  );
+  // Focusing a file from one of those repositories moves git, branch and
+  // terminal surfaces into it, but the explorer stays on the session's tree.
+  const explorerCwd = explorerRoots.some((root) =>
+    sameProjectPath(root, gitCwd),
+  )
+    ? explorerSession
+      ? sessionWorkCwd(explorerSession)
+      : sidebarCwd
+    : undefined;
+  // While an external file is focused, gitCwd's branch is that repository's,
+  // so only the session's own branch can name its worktree root.
+  const explorerLabel = explorerCwd
+    ? explorerSession?.worktreeCwd &&
+      sameProjectPath(explorerCwd, sessionWorkCwd(explorerSession))
+      ? explorerSession.branch || undefined
+      : undefined
+    : explorerRootLabel;
+  const explorerRootsRef = useRef(explorerRoots);
+  explorerRootsRef.current = explorerRoots;
+  const explorerCwdRef = useRef(explorerCwd);
+  explorerCwdRef.current = explorerCwd;
+  const onRemoveExplorerRoot = useCallback(
+    (root: string) => {
+      if (!explorerSessionId) return;
+      void removeSessionCheckpointRoot(explorerSessionId, root).catch(
+        () => undefined,
+      );
+    },
+    [explorerSessionId],
+  );
   const projectBranches = useProjectBranches(
     sidebarCwd,
     Boolean(sidebarCwd) && sidebarCwd !== "~",
@@ -6343,7 +6387,15 @@ function Workspace({
     (path, navigation, options) => {
       closeMonoView();
       void (async () => {
-        const fileCwd = gitCwdRef.current;
+        // A file in an external repository opens as that repository's file
+        // so source control follows it; anything else belongs to the tree
+        // the explorer is showing.
+        const fileCwd =
+          explorerRootsRef.current.find((root) =>
+            isEqualOrInside(path, root),
+          ) ??
+          explorerCwdRef.current ??
+          gitCwdRef.current;
         const fileProjectCwd = sidebarCwdRef.current;
         const resolved = await resolveFileOpenRequest(fileCwd, path, options);
         rememberOpenedFile(fileCwd, resolved);
@@ -12468,7 +12520,10 @@ function Workspace({
                   ? workspaceNavigation.error.message
                   : undefined
               }
-              explorerRootLabel={explorerRootLabel}
+              explorerRootLabel={explorerLabel}
+              explorerCwd={explorerCwd}
+              explorerRoots={explorerRoots}
+              onRemoveExplorerRoot={onRemoveExplorerRoot}
               open={sessionSidebarOpen}
               tab={sidebarTab}
               onTabChange={setSidebarTab}
