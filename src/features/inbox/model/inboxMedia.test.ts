@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  INBOX_MEDIA_PREFIXES,
-  inboxMediaPrefixes,
   isInboxMediaUrl,
+  remoteImageUrl,
   sniffInboxMedia,
 } from "./inboxMedia";
 
@@ -74,29 +73,31 @@ describe("isInboxMediaUrl on GitHub Enterprise", () => {
       ),
     ).toBe(false);
   });
-
-  it("adds the host's attachment prefixes for the sanitizer", () => {
-    expect(inboxMediaPrefixes("github.com")).toEqual(INBOX_MEDIA_PREFIXES);
-    expect(inboxMediaPrefixes(host)).toEqual(
-      expect.arrayContaining([
-        "https://oss.example.com/user-attachments/",
-        "https://oss.example.com/storage/",
-        "https://media.oss.example.com/",
-      ]),
-    );
-  });
 });
 
-describe("INBOX_MEDIA_PREFIXES", () => {
-  it("stays on HTTPS attachment hosts", () => {
+describe("remoteImageUrl", () => {
+  it("allows images on any HTTPS host", () => {
+    expect(remoteImageUrl("https://img.shields.io/badge/ci-passing.svg")).toBe(
+      "https://img.shields.io/badge/ci-passing.svg",
+    );
     expect(
-      INBOX_MEDIA_PREFIXES.every((prefix) => prefix.startsWith("https://")),
-    ).toBe(true);
-    expect(
-      INBOX_MEDIA_PREFIXES.some((prefix) =>
-        prefix.startsWith("https://github.com/user-attachments/"),
-      ),
-    ).toBe(true);
+      remoteImageUrl(" https://wiki.example.com/download/a/image.png?v=1 "),
+    ).toBe("https://wiki.example.com/download/a/image.png?v=1");
+  });
+
+  it("rejects insecure, local, credentialed and relative URLs", () => {
+    for (const url of [
+      "http://example.com/a.png",
+      "https://user:pw@example.com/a.png",
+      "https://localhost/a.png",
+      "https://127.0.0.1/a.png",
+      "https://0x7f.1/a.png",
+      "https://[::1]/a.png",
+      "/relative/a.png",
+      "data:image/png;base64,AAAA",
+    ]) {
+      expect(remoteImageUrl(url)).toBeNull();
+    }
   });
 });
 
@@ -107,6 +108,16 @@ describe("sniffInboxMedia", () => {
         new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
       ),
     ).toEqual({ kind: "image", mime: "image/png" });
+    expect(
+      sniffInboxMedia(
+        new TextEncoder().encode(
+          '\uFEFF<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+        ),
+      ),
+    ).toEqual({ kind: "image", mime: "image/svg+xml" });
+    expect(
+      sniffInboxMedia(new TextEncoder().encode("<!doctype html><html></html>")),
+    ).toBeNull();
     expect(
       sniffInboxMedia(
         new Uint8Array([
