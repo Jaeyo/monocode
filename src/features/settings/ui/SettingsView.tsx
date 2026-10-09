@@ -260,6 +260,10 @@ import {
   type GithubStatus,
 } from "../../inbox/model/githubTasks";
 import {
+  getGithubHost,
+  saveGithubHost,
+} from "../../inbox/model/githubHost";
+import {
   disconnectGitlab,
   gitlabConnected,
   saveGitlabConfig,
@@ -1265,6 +1269,9 @@ function GithubSettings() {
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [host, setHost] = useState(getGithubHost);
+  const [hostDraft, setHostDraft] = useState(getGithubHost);
+  const [savingHost, setSavingHost] = useState(false);
   const request = useRef(0);
 
   const checkStatus = useCallback(async () => {
@@ -1290,11 +1297,30 @@ function GithubSettings() {
     };
   }, [checkStatus]);
 
+  const onSaveHost = async () => {
+    if (savingHost) return;
+    setSavingHost(true);
+    setError(null);
+    try {
+      const saved = await saveGithubHost(hostDraft);
+      setHost(saved);
+      setHostDraft(saved);
+      clearInboxCache();
+      await checkStatus();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingHost(false);
+    }
+  };
+
+  const login =
+    host === "github.com" ? "gh auth login" : `gh auth login --hostname ${host}`;
   const description = status?.connected
-    ? "GitHub CLI is installed and authenticated. MonoCode uses it for GitHub inbox items."
+    ? `GitHub CLI is installed and authenticated to ${host}. MonoCode uses it for GitHub inbox items.`
     : status?.installed
-      ? "Run gh auth login in a terminal, complete the sign-in flow, then check again."
-      : "Install GitHub CLI from cli.github.com, run gh auth login in a terminal, then check again.";
+      ? `Run ${login} in a terminal, complete the sign-in flow, then check again.`
+      : `Install GitHub CLI from cli.github.com, run ${login} in a terminal, then check again.`;
   const label = checking
     ? "Checking"
     : status?.connected
@@ -1305,6 +1331,34 @@ function GithubSettings() {
 
   return (
     <>
+      <Row
+        label="Host"
+        description="github.com, or your GitHub Enterprise Server host such as github.example.com."
+      >
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+          <label className="flex h-7 w-52 max-w-full shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+            <input
+              type="text"
+              value={hostDraft}
+              onChange={(event) => setHostDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void onSaveHost();
+              }}
+              placeholder="github.com"
+              aria-label="GitHub host"
+              autoComplete="off"
+              spellCheck={false}
+              className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
+            />
+          </label>
+          <SecondaryButton
+            onClick={() => void onSaveHost()}
+            disabled={savingHost || hostDraft.trim() === host}
+          >
+            {savingHost ? "Saving" : "Save"}
+          </SecondaryButton>
+        </div>
+      </Row>
       <Row label="Connection" description={description}>
         <span className="text-[12px] text-content/50">{label}</span>
         {!checking && !status?.installed ? (

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub const DEFAULT_GITHUB_HOST: &str = "github.com";
 
@@ -70,6 +70,7 @@ pub fn github_set_host(app: AppHandle, host: String) -> Result<String, String> {
         write_config(&app, &GithubConfig { host: host.clone() })?;
     }
     set_current(host.clone());
+    let _ = app.emit("github_host_changed", &host);
     Ok(host)
 }
 
