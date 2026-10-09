@@ -17,6 +17,7 @@ import {
   generateCodexPrContent,
 } from "./codexGit";
 import { refreshCodexCatalog } from "./codexCatalog";
+import { importCodexExternalSession } from "./codexImport";
 import { generateCodexSessionTitle } from "./codexTitle";
 import {
   runCodexTextPrompt,
@@ -43,6 +44,7 @@ export const codexAdapter: HarnessAdapter = {
   stopSession: stopCodexSession,
   forgetSession: forgetCodexSession,
   bindSession: bindCodexSession,
+  importExternalSession: importCodexExternalSession,
   refreshCatalog: refreshCodexCatalog,
   generateTitle: generateCodexSessionTitle,
   generateCommitMessage: generateCodexCommitMessage,
