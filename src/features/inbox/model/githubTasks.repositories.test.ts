@@ -9,6 +9,7 @@ import {
   githubWorkItemThread,
   listInboxItems,
   peekGithubWorkItemDetails,
+  skipHiddenProjects,
   type GithubWorkItem,
 } from "./githubTasks";
 
@@ -230,5 +231,65 @@ describe("repository-qualified GitHub item operations", () => {
       body: "Looks good",
       inReplyTo: "",
     });
+  });
+});
+
+describe("hidden Inbox projects", () => {
+  it("are not fetched unless they hold a featured item", async () => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      const input = args as Record<string, unknown> | undefined;
+      if (command === "git_github_repositories") {
+        const cwd = String(input?.cwd);
+        return [
+          cwd === "/tmp/api"
+            ? "acme/api"
+            : cwd === "/tmp/docs"
+              ? "acme/docs"
+              : "acme/web",
+        ] as never;
+      }
+      if (command === "git_github_work_items") return [] as never;
+      if (
+        command === "linear_status" ||
+        command === "jira_status" ||
+        command === "gitlab_status" ||
+        command === "azure_devops_status"
+      ) {
+        return { connected: false } as never;
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    await listInboxItems(
+      [{ path: "/tmp/web" }, { path: "/tmp/api" }, { path: "/tmp/docs" }],
+      {
+        assignedToMe: false,
+        state: "open",
+        search: "",
+        hiddenProjects: ["/tmp/api/", "/tmp/docs"],
+        featuredKeys: ["github:acme/docs:issue:7"],
+      },
+    );
+
+    const fetched = new Set(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "git_github_work_items")
+        .map(([, args]) => (args as Record<string, unknown>).repo),
+    );
+    expect(fetched).toEqual(new Set(["acme/web", "acme/docs"]));
+  });
+
+  it("still fetch a repository that a visible project also checks out", () => {
+    expect(
+      skipHiddenProjects(
+        [
+          { path: "/tmp/web-old", repo: "acme/web" },
+          { path: "/tmp/web", repo: "acme/web" },
+        ],
+        { hiddenProjects: ["/tmp/web-old"] },
+        "github",
+      ),
+    ).toEqual([{ path: "/tmp/web", repo: "acme/web" }]);
   });
 });

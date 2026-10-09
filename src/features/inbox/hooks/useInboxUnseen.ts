@@ -41,6 +41,7 @@ import {
   subscribeLinkedSessionSeen,
 } from "../model/linkedSessionSeen";
 import { loadHiddenLinearTeamIds } from "../model/linear";
+import { loadInboxFeatured } from "../model/inboxFeatured";
 import { JIRA_CHANGE_EVENT, loadHiddenJiraProjectIds } from "../model/jira";
 import type { RecentProject } from "../../projects/model/recents";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
@@ -183,6 +184,8 @@ export function useInboxActivity(
         search: "",
         linearHiddenTeamIds: loadHiddenLinearTeamIds(),
         jiraHiddenProjectIds: loadHiddenJiraProjectIds(),
+        hiddenProjects: filters.hiddenProjects,
+        featuredKeys: loadInboxFeatured(),
       };
       try {
         const listed = await listInboxItems(projects, query, { force });

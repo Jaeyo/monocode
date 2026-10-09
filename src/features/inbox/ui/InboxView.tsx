@@ -320,6 +320,7 @@ function peekInboxForRail(recents: RecentProject[], cwd: string) {
     search: "",
     linearHiddenTeamIds: loadHiddenLinearTeamIds(),
     jiraHiddenProjectIds: loadHiddenJiraProjectIds(),
+    hiddenProjects: filters.hiddenProjects,
   });
 }
 
@@ -578,6 +579,8 @@ export function InboxView({
       jiraHiddenProjectIds,
     );
   const fetchState = inboxFetchState(activeFilters);
+  // A string so that unrelated filter edits keep the query, and its effect, stable.
+  const hiddenProjectsKey = activeFilters.hiddenProjects.join("\n");
   const fetchQuery = useMemo<InboxQuery>(
     () => ({
       assignedToMe: activeFilters.assignedToMe,
@@ -585,12 +588,16 @@ export function InboxView({
       search: "",
       linearHiddenTeamIds,
       jiraHiddenProjectIds,
+      hiddenProjects: hiddenProjectsKey ? hiddenProjectsKey.split("\n") : [],
+      featuredKeys,
     }),
     [
       activeFilters.assignedToMe,
       fetchState,
       linearHiddenTeamIds,
       jiraHiddenProjectIds,
+      hiddenProjectsKey,
+      featuredKeys,
     ],
   );
 

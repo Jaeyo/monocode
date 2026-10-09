@@ -159,6 +159,13 @@ export type GithubWorkItemQuery = {
 export type InboxQuery = Omit<GithubWorkItemQuery, "kind"> & {
   linearHiddenTeamIds?: string[];
   jiraHiddenProjectIds?: string[];
+  /** Project paths hidden in the Inbox filters; their repositories are not fetched. */
+  hiddenProjects?: readonly string[];
+  /**
+   * Featured `inboxItemKey`s. A hidden project's repository is still fetched
+   * while it holds one, so the pin does not look like a vanished item.
+   */
+  featuredKeys?: readonly string[];
 };
 
 export type InboxProviderErrors = Partial<Record<InboxProvider, string>>;
@@ -242,7 +249,11 @@ export function inboxListCacheKey(
     .join("|");
   const teams = [...(query.linearHiddenTeamIds ?? [])].sort().join(",");
   const jiraProjects = [...(query.jiraHiddenProjectIds ?? [])].sort().join(",");
-  return `${query.assignedToMe ? 1 : 0}:${query.state}:${paths}:${teams}:${jiraProjects}`;
+  const hidden = [...(query.hiddenProjects ?? [])]
+    .map(normalizeProjectPath)
+    .sort()
+    .join("|");
+  return `${query.assignedToMe ? 1 : 0}:${query.state}:${paths}:${teams}:${jiraProjects}:${hidden}`;
 }
 
 export function peekInboxList(
@@ -775,7 +786,9 @@ async function fetchInboxItems(
       ? result.value.map((repo) => ({ path: unique[index]!.path, repo }))
       : [],
   );
-  const grouped = groupProjectsByRepo(resolved);
+  const grouped = groupProjectsByRepo(
+    skipHiddenProjects(resolved, query, "github"),
+  );
   const githubJobs = grouped.flatMap((project) =>
     (["issue", "pr"] as const).map(async (kind) => {
       const items = await listGithubWorkItems(project.path, project.repo, {
@@ -889,11 +902,11 @@ async function fetchRepositoryInboxItems(
       }
     }),
   );
-  const grouped = groupProjectsByRepo(
-    resolved.filter((project) => project.repo.length > 0),
-  );
+  const known = resolved.filter((project) => project.repo.length > 0);
 
   if (query.assignedToMe) {
+    // To-Dos are one account-wide request; every project only maps repos back.
+    const grouped = groupProjectsByRepo(known);
     const localPathByRepo = new Map(
       grouped.map((project) => [project.repo.toLowerCase(), project.path]),
     );
@@ -913,6 +926,9 @@ async function fetchRepositoryInboxItems(
     return collectInboxResults(await Promise.allSettled(jobs), preferredPaths);
   }
 
+  const grouped = groupProjectsByRepo(
+    skipHiddenProjects(known, query, provider),
+  );
   const jobs = grouped.flatMap((project) =>
     (["issue", "pr"] as const).map(async (kind) => {
       const items = await listWorkItems(project.path, {
@@ -1079,6 +1095,43 @@ export function groupProjectsByRepo(
     });
   }
   return grouped;
+}
+
+/**
+ * Drops hidden projects before repositories are grouped, so a repository that
+ * is also checked out in a visible project is still fetched for that one.
+ */
+export function skipHiddenProjects(
+  resolved: readonly { path: string; repo: string }[],
+  query: Pick<InboxQuery, "hiddenProjects" | "featuredKeys">,
+  provider: InboxProvider,
+): { path: string; repo: string }[] {
+  const hidden = new Set(
+    (query.hiddenProjects ?? []).map(normalizeProjectPath),
+  );
+  if (hidden.size === 0) return [...resolved];
+  const featured = featuredRepos(query.featuredKeys ?? [], provider);
+  return resolved.filter(
+    (project) =>
+      !hidden.has(normalizeProjectPath(project.path)) ||
+      featured.has(project.repo.trim().toLowerCase()),
+  );
+}
+
+/** Repositories named by featured keys, which are `provider:repo:kind:number`. */
+function featuredRepos(
+  keys: readonly string[],
+  provider: InboxProvider,
+): Set<string> {
+  const repos = new Set<string>();
+  const prefix = `${provider}:`;
+  for (const key of keys) {
+    if (!key.startsWith(prefix)) continue;
+    const parts = key.slice(prefix.length).split(":");
+    if (parts.length < 3) continue;
+    repos.add(parts.slice(0, -2).join(":").toLowerCase());
+  }
+  return repos;
 }
 
 export function collectInboxResults(
