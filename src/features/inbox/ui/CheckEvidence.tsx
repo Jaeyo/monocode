@@ -4,6 +4,7 @@ import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { AlertCircle, CircleX, ExternalLink } from "../../../shared/ui/icons";
 import { gitCommitFileDiff } from "../../../platform/tauri/fs";
 import type { GithubCheckDetails } from "../model/githubPrChecks";
+import { getGithubHost } from "../model/githubHost";
 
 type Annotation = GithubCheckDetails["annotations"][number];
 type SourceCache = Map<string, Promise<string | null>>;
@@ -112,7 +113,7 @@ function CheckAnnotation({
     repo.split("/").every((part) => part !== "." && part !== "..");
   const fileUrl =
     validRepo && validPath && validCommit
-      ? `https://github.com/${repo}/blob/${headOid}/${relative.split("/").map(encodeURIComponent).join("/")}${validLine ? `#L${annotation.line}` : ""}`
+      ? `https://${getGithubHost()}/${repo}/blob/${headOid}/${relative.split("/").map(encodeURIComponent).join("/")}${validLine ? `#L${annotation.line}` : ""}`
       : null;
   const location = `${annotation.path}${validLine ? `:${annotation.line}` : ""}`;
   const [messageTitle, ...messageLines] = annotation.message.split(/\r?\n/);

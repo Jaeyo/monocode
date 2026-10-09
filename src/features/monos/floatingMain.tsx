@@ -23,7 +23,10 @@ import {
 import { FloatingMonoChat } from "./ui/FloatingMonoChat";
 import { homeDir } from "../../platform/tauri/fs";
 import { setHomeDir } from "../../shared/lib/paths";
+import { initGithubHost } from "../inbox/model/githubHost";
 import "../../styles/index.css";
+
+void initGithubHost();
 
 let appearanceKey = "";
 function applyFloatingAppearance() {

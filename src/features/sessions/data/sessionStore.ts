@@ -46,6 +46,7 @@ import type {
 } from "../model/session";
 
 import { HARNESSES, RUNTIME_MODES } from "../model/session";
+import { githubWorkItemUrl } from "../../inbox/model/githubHost";
 
 import { restoreOrchestrationProposal } from "../../orchestration/model/orchestrationPlan";
 
@@ -323,7 +324,7 @@ export function sanitizeLinkedWorkItem(
     kind,
     repo,
     number,
-    url: `https://github.com/${repo}/${kind === "pr" ? "pull" : "issues"}/${number}`,
+    url: githubWorkItemUrl(repo, kind, number),
   };
 }
 

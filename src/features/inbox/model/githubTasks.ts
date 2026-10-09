@@ -40,6 +40,7 @@ import {
   type RecentProject,
 } from "../../projects/model/recents";
 import { recordInboxSelfActivity } from "./inboxSelfActivity";
+import { isGithubDotcom } from "./githubHost";
 
 export type GithubTaskKind = "issue" | "pr";
 export type GithubPrAction =
@@ -385,7 +386,8 @@ export function formatGithubQuery(query: GithubWorkItemQuery): string {
 
 export function githubAvatarUrl(login: string, size = 64): string {
   const name = login.trim();
-  if (!name) return "";
+  // GitHub Enterprise avatars require a browser session, so show initials.
+  if (!name || !isGithubDotcom()) return "";
   return `https://avatars.githubusercontent.com/${encodeURIComponent(name)}?s=${size}`;
 }
 

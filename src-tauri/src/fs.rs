@@ -1227,6 +1227,8 @@ pub enum GitHubStarStatus {
 }
 
 const MONOCODE_STAR_ENDPOINT: &str = "/user/starred/hardbeat920/monocode";
+// The MonoCode repository is on github.com even when GitHub Enterprise is configured.
+const DOTCOM_HOST: &str = crate::github_host::DEFAULT_GITHUB_HOST;
 
 /// Whether the GitHub CLI is installed and has an active authenticated account.
 #[tauri::command]
@@ -1244,8 +1246,9 @@ fn git_github_status_for() -> GitHubStatus {
             authenticated: false,
         };
     };
+    let host = crate::github_host::current();
     let mut cmd = Command::new(program);
-    cmd.args(["auth", "status", "--active", "--hostname", "github.com"])
+    cmd.args(["auth", "status", "--active", "--hostname", &host])
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
@@ -1274,7 +1277,13 @@ pub async fn github_monocode_star_status() -> Result<GitHubStarStatus, String> {
 fn github_monocode_star_status_for() -> GitHubStarStatus {
     let result = gh_run(
         Path::new("."),
-        &["api", "--silent", MONOCODE_STAR_ENDPOINT],
+        &[
+            "api",
+            "--hostname",
+            DOTCOM_HOST,
+            "--silent",
+            MONOCODE_STAR_ENDPOINT,
+        ],
         true,
     );
     github_star_status_from_result(result)
@@ -1294,7 +1303,15 @@ pub async fn github_star_monocode() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(|| {
         gh_run(
             Path::new("."),
-            &["api", "--silent", "--method", "PUT", MONOCODE_STAR_ENDPOINT],
+            &[
+                "api",
+                "--hostname",
+                DOTCOM_HOST,
+                "--silent",
+                "--method",
+                "PUT",
+                MONOCODE_STAR_ENDPOINT,
+            ],
             true,
         )
         .map(|_| ())
@@ -1585,11 +1602,10 @@ pub async fn git_github_check_details(
     job_id: String,
 ) -> Result<GitHubCheckDetails, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        github_check_details_with(&repo, &job_id, |endpoint| {
-            gh_checked(
-                &expand_home(&cwd),
-                &["api", "--hostname", "github.com", endpoint],
-            )
+        let host = crate::github_host::current();
+        let api_base = crate::github_host::api_base(&host);
+        github_check_details_with(&repo, &job_id, &api_base, |endpoint| {
+            gh_checked(&expand_home(&cwd), &["api", "--hostname", &host, endpoint])
         })
     })
     .await
@@ -1599,6 +1615,7 @@ pub async fn git_github_check_details(
 fn github_check_details_with(
     repo: &str,
     job_id: &str,
+    api_base: &str,
     mut fetch: impl FnMut(&str) -> Result<String, String>,
 ) -> Result<GitHubCheckDetails, String> {
     let (owner, name) = split_github_repo(repo)?;
@@ -1651,7 +1668,7 @@ fn github_check_details_with(
         annotations: vec![],
         notice: None,
     };
-    let check_prefix = format!("https://api.github.com/{prefix}/check-runs/");
+    let check_prefix = format!("{api_base}/{prefix}/check-runs/");
     let check_id = job
         .check_run_url
         .as_deref()
@@ -3567,8 +3584,13 @@ fn github_review_thread(thread: GithubGraphqlReviewThread) -> Option<GitHubWorkI
 }
 
 fn github_avatar_url(login: &str) -> String {
+    github_avatar_url_for(&crate::github_host::current(), login)
+}
+
+fn github_avatar_url_for(host: &str, login: &str) -> String {
     let login = login.trim();
-    if login.is_empty() {
+    // GitHub Enterprise avatars require a browser session, so show initials.
+    if login.is_empty() || !crate::github_host::is_dotcom(host) {
         return String::new();
     }
     let mut encoded = String::with_capacity(login.len());
@@ -3882,31 +3904,28 @@ fn gh_repo_view_url(root: &Path) -> Option<String> {
 
 fn remote_matching_github_url(root: &Path, url: &str) -> Option<String> {
     let remotes = git_stdout(root, &["remote", "-v"])?;
-    let wanted = normalize_github_remote_url(url);
+    let host = crate::github_host::current();
+    let wanted = normalize_github_remote_url(&host, url);
     for line in remotes.lines() {
         let mut parts = line.split_whitespace();
         let name = parts.next()?;
         let remote_url = parts.next()?;
-        if normalize_github_remote_url(remote_url) == wanted {
+        if normalize_github_remote_url(&host, remote_url) == wanted {
             return Some(name.to_string());
         }
     }
     None
 }
 
-fn normalize_github_remote_url(url: &str) -> String {
+fn normalize_github_remote_url(host: &str, url: &str) -> String {
     let trimmed = url.trim().trim_end_matches('/').trim_end_matches(".git");
-    if let Some((_, rest)) = trimmed.split_once("github.com:") {
-        return format!(
-            "github.com/{}",
-            rest.trim_start_matches('/').to_ascii_lowercase()
-        );
-    }
-    if let Some((_, rest)) = trimmed.split_once("github.com/") {
-        return format!(
-            "github.com/{}",
-            rest.trim_start_matches('/').to_ascii_lowercase()
-        );
+    for separator in [':', '/'] {
+        if let Some((_, rest)) = trimmed.split_once(&format!("{host}{separator}")) {
+            return format!(
+                "{host}/{}",
+                rest.trim_start_matches('/').to_ascii_lowercase()
+            );
+        }
     }
     trimmed.to_ascii_lowercase()
 }
@@ -4220,6 +4239,7 @@ fn gh_run_raw(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, S
     let mut cmd = Command::new(&program);
     cmd.current_dir(root)
         .args(args)
+        .env("GH_HOST", crate::github_host::current())
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
@@ -8205,6 +8225,52 @@ mod tests {
     }
 
     #[test]
+    fn github_avatar_url_is_empty_for_enterprise_hosts() {
+        assert_eq!(github_avatar_url_for("oss.example.com", "maya"), "");
+    }
+
+    #[test]
+    fn normalize_github_remote_url_matches_the_configured_host() {
+        let host = "oss.example.com";
+        assert_eq!(
+            normalize_github_remote_url(host, "git@oss.example.com:Acme/Web.git"),
+            "oss.example.com/acme/web"
+        );
+        assert_eq!(
+            normalize_github_remote_url(host, "https://oss.example.com/acme/web/"),
+            "oss.example.com/acme/web"
+        );
+        assert_eq!(
+            normalize_github_remote_url("github.com", "git@github.com:acme/web.git"),
+            "github.com/acme/web"
+        );
+    }
+
+    #[test]
+    fn github_check_details_reads_enterprise_check_run_annotations() {
+        let details = github_check_details_with(
+            "acme/web",
+            "123",
+            "https://oss.example.com/api/v3",
+            |path| match path {
+                "repos/acme/web/actions/jobs/123" => Ok(r#"{
+                    "id":123,
+                    "check_run_url":"https://oss.example.com/api/v3/repos/acme/web/check-runs/456",
+                    "steps":[]
+                }"#
+                .into()),
+                "repos/acme/web/check-runs/456/annotations?per_page=100" => Ok(r#"[
+                    {"path":"src/app.ts","start_line":7,"message":"Boom","annotation_level":"failure"}
+                ]"#
+                .into()),
+                _ => panic!("Unexpected request: {path}"),
+            },
+        )
+        .unwrap();
+        assert_eq!(details.annotations[0].message, "Boom");
+    }
+
+    #[test]
     fn parse_github_pr_diff_meta_reads_files_and_totals() {
         let json = r#"{
             "additions": 971,
@@ -8276,7 +8342,7 @@ mod tests {
 
     #[test]
     fn github_check_details_reads_steps_and_failure_annotations() {
-        let details = github_check_details_with("acme/web", "123", |path| {
+        let details = github_check_details_with("acme/web", "123", "https://api.github.com", |path| {
             match path {
                 "repos/acme/web/actions/jobs/123" => Ok(r#"{
                     "id":123, "status":"completed", "conclusion":"failure",

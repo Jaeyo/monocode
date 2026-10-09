@@ -15,7 +15,10 @@ import {
 } from "../settings/model/appearance";
 import { QuickGitPopup } from "./ui/QuickGitPopup";
 import { QuickComposer } from "./ui/QuickComposer";
+import { initGithubHost } from "../inbox/model/githubHost";
 import "../../styles/index.css";
+
+void initGithubHost();
 
 /**
  * Only the theme, not the workspace's glass, backgrounds, or scale: the panel

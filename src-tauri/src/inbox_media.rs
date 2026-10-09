@@ -266,7 +266,8 @@ fn github_auth_token() -> Option<String> {
     let home = dirs_home()?;
     let mut cmd = Command::new(program);
     cmd.current_dir(&home)
-        .args(["auth", "token"])
+        // Media hosts are github.com's; never send a GitHub Enterprise token there.
+        .args(["auth", "token", "--hostname", "github.com"])
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PAGER", "cat");
     crate::harness::apply_gui_env(&mut cmd);
