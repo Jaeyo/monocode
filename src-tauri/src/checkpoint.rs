@@ -17,6 +17,8 @@ use crate::fs::{
 
 const MAX_SNAPSHOT_FILES: usize = 500;
 
+mod turn;
+
 #[derive(Clone)]
 pub struct CheckpointStore {
     root: PathBuf,
@@ -59,37 +61,50 @@ impl CheckpointStore {
     }
 
     fn prepare(&self, session_id: &str, cwd: &str, paths: &[String]) -> Result<(), String> {
-        self.record_paths(session_id, cwd, paths, prepare_path)
+        let turn_owned = self.has_turn_review(session_id, cwd)?;
+        self.record_paths(session_id, cwd, paths, prepare_path, turn_owned)
     }
 
     fn capture(&self, session_id: &str, cwd: &str, paths: &[String]) -> Result<(), String> {
-        self.record_paths(session_id, cwd, paths, capture_path)
+        let turn_owned = self.capture_turn_paths(session_id, cwd, paths)?;
+        self.record_paths(session_id, cwd, paths, capture_path, turn_owned)
     }
 
     /// Route each edited path to the project or to the external Git
     /// repository that holds it, then record it in that scope's manifest.
+    /// When a turn review owns the project it records project files from Git,
+    /// so only external repositories are recorded here.
     fn record_paths(
         &self,
         session_id: &str,
         cwd: &str,
         paths: &[String],
         record: fn(&Path, &Path, &mut Manifest, String) -> Result<bool, String>,
+        turn_owned: bool,
     ) -> Result<(), String> {
         if paths.is_empty() {
             return Ok(());
         }
         let root = project_root(cwd)?;
         let dir = self.session_dir(session_id);
-        let mut manifest = match read_manifest(&dir)? {
-            Some(manifest) if same_cwd(&manifest.cwd, cwd) => manifest,
-            _ => return Ok(()),
+        let mut manifest = if turn_owned {
+            None
+        } else {
+            match read_manifest(&dir)? {
+                Some(manifest) if same_cwd(&manifest.cwd, cwd) => Some(manifest),
+                _ => return Ok(()),
+            }
         };
 
         let mut dirty = false;
         let mut external: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
         for path in paths {
             match relative_to_root(&root, path) {
-                Ok(relative) => dirty |= record(&dir, &root, &mut manifest, relative)?,
+                Ok(relative) => {
+                    if let Some(manifest) = manifest.as_mut() {
+                        dirty |= record(&dir, &root, manifest, relative)?;
+                    }
+                }
                 Err(_) => {
                     if let Some((repo, relative)) = locate_external(&root, path) {
                         external.entry(repo).or_default().push(relative);
@@ -97,7 +112,7 @@ impl CheckpointStore {
                 }
             }
         }
-        if dirty {
+        if let Some(manifest) = manifest.filter(|_| dirty) {
             write_manifest(&dir, &manifest)?;
         }
 
@@ -118,10 +133,11 @@ impl CheckpointStore {
     }
 
     fn status(&self, session_id: &str, cwd: &str) -> Result<CheckpointStatus, String> {
-        let Some(scopes) = self.scopes(session_id, cwd)? else {
+        let turn = self.turn_status(session_id, cwd)?;
+        let Some(scopes) = self.scopes(session_id, cwd, turn.is_some())? else {
             return Ok(CheckpointStatus { files: Vec::new() });
         };
-        let mut files = Vec::new();
+        let mut files = turn.map(|status| status.files).unwrap_or_default();
         for scope in &scopes {
             files.extend(self.scope_status(session_id, scope).files);
         }
@@ -145,18 +161,27 @@ impl CheckpointStore {
     }
 
     /// The project scope followed by every external repository this session
-    /// edited, or None when the session has no checkpoint for this cwd.
-    fn scopes(&self, session_id: &str, cwd: &str) -> Result<Option<Vec<Scope>>, String> {
-        let Some(manifest) = self.load_matching(session_id, cwd)? else {
-            return Ok(None);
-        };
+    /// edited, or None when the session has no checkpoint for this cwd. A
+    /// turn review owns the project instead, leaving only external scopes.
+    fn scopes(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        turn_owned: bool,
+    ) -> Result<Option<Vec<Scope>>, String> {
         let dir = self.session_dir(session_id);
-        let mut scopes = vec![Scope {
-            dir: dir.clone(),
-            root: project_root(cwd)?,
-            manifest,
-            external: false,
-        }];
+        let mut scopes = Vec::new();
+        if !turn_owned {
+            let Some(manifest) = self.load_matching(session_id, cwd)? else {
+                return Ok(None);
+            };
+            scopes.push(Scope {
+                dir: dir.clone(),
+                root: project_root(cwd)?,
+                manifest,
+                external: false,
+            });
+        }
         scopes.extend(external_scopes(&dir));
         Ok(Some(scopes))
     }
@@ -243,6 +268,7 @@ impl CheckpointStore {
     }
 
     fn forget(&self, session_id: &str) -> Result<(), String> {
+        self.forget_turns(session_id)?;
         let dir = self.session_dir(session_id);
         if dir.exists() {
             std::fs::remove_dir_all(dir).map_err(|e| e.to_string())?;
@@ -256,9 +282,15 @@ impl CheckpointStore {
         cwd: &str,
         key: &str,
     ) -> Result<CheckpointFileDiff, String> {
-        let Some(scopes) = self.scopes(session_id, cwd)? else {
+        let turn_owned = self.has_turn_review(session_id, cwd)?;
+        let Some(scopes) = self.scopes(session_id, cwd, turn_owned)? else {
             return Err("Session changes are no longer available".into());
         };
+        if turn_owned && locate_external_scope(&scopes, key).is_none() {
+            return self
+                .turn_file_diff(session_id, cwd, key)?
+                .ok_or_else(|| "Session changes are no longer available".into());
+        }
         let (scope, relative) = locate_scope(&scopes, key)?;
         let mut diff = file_diff_in(scope, relative)?;
         if scope.external {
@@ -304,10 +336,15 @@ impl CheckpointStore {
         cwd: &str,
         key: Option<&str>,
     ) -> Result<CheckpointStatus, String> {
-        let Some(mut scopes) = self.scopes(session_id, cwd)? else {
+        let turn_owned = self.has_turn_review(session_id, cwd)?;
+        let Some(mut scopes) = self.scopes(session_id, cwd, turn_owned)? else {
             return Ok(CheckpointStatus { files: Vec::new() });
         };
         if let Some(key) = key {
+            if turn_owned && locate_external_scope(&scopes, key).is_none() {
+                self.undo_turn(session_id, cwd, Some(key))?;
+                return self.status(session_id, cwd);
+            }
             let (index, relative) = {
                 let (scope, relative) = locate_scope(&scopes, key)?;
                 let index = scopes.iter().position(|item| item.dir == scope.dir);
@@ -354,12 +391,22 @@ impl CheckpointStore {
                 "Cannot safely undo all: one or more files changed outside this session".into(),
             );
         }
+        if turn_owned {
+            // The turn validates all of its files before restoring any, so a
+            // refusal there leaves the external repositories untouched too.
+            self.undo_turn(session_id, cwd, None)?;
+        }
         for (scope, status) in scopes.iter().zip(&changed) {
             for file in &status.files {
                 restore_one(&scope.dir, &scope.root, &scope.manifest, &file.relative)?;
             }
         }
-        clear_changes(&self.session_dir(session_id));
+        let dir = self.session_dir(session_id);
+        if turn_owned {
+            clear_external_changes(&dir);
+            return self.status(session_id, cwd);
+        }
+        clear_changes(&dir);
         Ok(CheckpointStatus { files: Vec::new() })
     }
 
@@ -369,13 +416,24 @@ impl CheckpointStore {
         cwd: &str,
         key: Option<&str>,
     ) -> Result<CheckpointStatus, String> {
-        let Some(mut scopes) = self.scopes(session_id, cwd)? else {
+        let turn_owned = self.has_turn_review(session_id, cwd)?;
+        let Some(mut scopes) = self.scopes(session_id, cwd, turn_owned)? else {
             return Ok(CheckpointStatus { files: Vec::new() });
         };
         let Some(key) = key else {
-            clear_changes(&self.session_dir(session_id));
+            let dir = self.session_dir(session_id);
+            if turn_owned {
+                self.keep_turn(session_id, cwd, None)?;
+                clear_external_changes(&dir);
+                return self.status(session_id, cwd);
+            }
+            clear_changes(&dir);
             return Ok(CheckpointStatus { files: Vec::new() });
         };
+        if turn_owned && locate_external_scope(&scopes, key).is_none() {
+            self.keep_turn(session_id, cwd, Some(key))?;
+            return self.status(session_id, cwd);
+        }
         let (index, relative) = {
             let (scope, relative) = locate_scope(&scopes, key)?;
             let index = scopes.iter().position(|item| item.dir == scope.dir);
@@ -618,6 +676,46 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn session_checkpoint_begin_turn(
+    store: State<'_, CheckpointStore>,
+    session_id: String,
+    cwd: String,
+    turn_id: String,
+    edited_paths: Option<Vec<String>>,
+) -> Result<(), String> {
+    validate_id(&session_id, "session")?;
+    validate_id(&turn_id, "turn")?;
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        store.exclusive(|store| {
+            if let Some(paths) = &edited_paths {
+                store.capture_turn_paths(&session_id, &cwd, paths)?;
+            }
+            store.begin_turn(&session_id, &cwd, &turn_id)
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn session_checkpoint_finish_turn(
+    store: State<'_, CheckpointStore>,
+    session_id: String,
+    cwd: String,
+    turn_id: String,
+) -> Result<(), String> {
+    validate_id(&session_id, "session")?;
+    validate_id(&turn_id, "turn")?;
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        store.exclusive(|store| store.finish_turn(&session_id, &cwd, &turn_id))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn session_checkpoint_ensure(
     store: State<'_, CheckpointStore>,
     session_id: String,
@@ -675,11 +773,17 @@ pub async fn session_checkpoint_status(
     store: State<'_, CheckpointStore>,
     session_id: String,
     cwd: String,
+    edited_paths: Option<Vec<String>>,
 ) -> Result<CheckpointStatus, String> {
     validate_id(&session_id, "session")?;
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        store.exclusive(|store| store.status(&session_id, &cwd))
+        store.exclusive(|store| {
+            if let Some(paths) = &edited_paths {
+                store.recover_orphaned_turn(&session_id, &cwd, paths)?;
+            }
+            store.status(&session_id, &cwd)
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1639,20 +1743,24 @@ fn external_scopes(session_dir: &Path) -> Vec<Scope> {
 /// Resolve a review key to its scope. Relative keys belong to the project;
 /// absolute keys belong to the deepest external repository that holds them.
 fn locate_scope<'a>(scopes: &'a [Scope], key: &str) -> Result<(&'a Scope, String), String> {
-    let project = &scopes[0];
-    if let Ok(relative) = resolve_repo_path(&project.root, key) {
-        return Ok((project, relative));
+    if let Some(project) = scopes.first().filter(|scope| !scope.external) {
+        if let Ok(relative) = resolve_repo_path(&project.root, key) {
+            return Ok((project, relative));
+        }
     }
+    locate_external_scope(scopes, key).ok_or_else(|| "Invalid path".to_string())
+}
+
+/// The external repository an absolute review key belongs to, if any.
+fn locate_external_scope<'a>(scopes: &'a [Scope], key: &str) -> Option<(&'a Scope, String)> {
     let expanded = expand_home(key.trim());
-    let abs = expanded
-        .is_absolute()
-        .then(|| canonical_lenient(&expanded))
-        .flatten()
-        .ok_or("Invalid path")?;
+    if !expanded.is_absolute() {
+        return None;
+    }
+    let abs = canonical_lenient(&expanded)?;
     scopes
         .iter()
-        .skip(1)
-        .filter(|scope| abs.starts_with(&scope.root))
+        .filter(|scope| scope.external && abs.starts_with(&scope.root))
         .max_by_key(|scope| scope.root.components().count())
         .and_then(|scope| {
             let rest = abs.strip_prefix(&scope.root).ok()?;
@@ -1660,7 +1768,6 @@ fn locate_scope<'a>(scopes: &'a [Scope], key: &str) -> Result<(&'a Scope, String
                 resolve_repo_path(&scope.root, &rest.to_string_lossy().replace('\\', "/")).ok()?;
             Some((scope, relative))
         })
-        .ok_or_else(|| "Invalid path".to_string())
 }
 
 fn read_roots(session_dir: &Path) -> Vec<String> {
@@ -1681,9 +1788,16 @@ fn write_roots(session_dir: &Path, roots: &[String]) -> Result<(), String> {
 /// Drop every recorded change but keep the session's root list.
 fn clear_changes(session_dir: &Path) {
     let _ = std::fs::remove_file(session_dir.join("manifest.json"));
-    for name in ["files", "after", "external"] {
+    for name in ["files", "after"] {
         let _ = std::fs::remove_dir_all(session_dir.join(name));
     }
+    clear_external_changes(session_dir);
+}
+
+/// Drop the external repositories' recorded changes, leaving the project's
+/// manifest or turn review and the session's root list in place.
+fn clear_external_changes(session_dir: &Path) {
+    let _ = std::fs::remove_dir_all(session_dir.join("external"));
 }
 
 fn same_root(saved: &str, root: &Path) -> bool {
@@ -2201,6 +2315,39 @@ mod tests {
     }
 
     #[test]
+    fn mono_changes_in_two_repositories_can_be_kept_independently() {
+        let home = tmp("mono-multiple-repos");
+        for name in ["a", "b"] {
+            let repo = home.0.join(name);
+            std::fs::create_dir(&repo).unwrap();
+            assert!(init_git_commit(&repo, &[("file.txt", "old\n")]));
+        }
+        let cwd = home.0.to_string_lossy().into_owned();
+        let paths: Vec<String> = ["a/file.txt", "b/file.txt"]
+            .into_iter()
+            .map(|path| home.0.join(path).to_string_lossy().into_owned())
+            .collect();
+        let (_root, store) = store();
+        store.begin_turn("mono", &cwd, "turn").unwrap();
+        store.prepare("mono", &cwd, &paths).unwrap();
+        for path in &paths {
+            std::fs::write(path, "mono change\n").unwrap();
+        }
+        store.capture("mono", &cwd, &paths).unwrap();
+        store.finish_turn("mono", &cwd, "turn").unwrap();
+        assert_eq!(
+            relatives(&store.status("mono", &cwd).unwrap()),
+            vec!["a/file.txt", "b/file.txt"]
+        );
+        store.keep("mono", &cwd, Some("a/file.txt")).unwrap();
+        assert_eq!(
+            relatives(&store.status("mono", &cwd).unwrap()),
+            vec!["b/file.txt"]
+        );
+        assert_eq!(std::fs::read_to_string(&paths[1]).unwrap(), "mono change\n");
+    }
+
+    #[test]
     fn late_capture_is_not_attributed_to_the_session() {
         let repo = tmp("late-capture");
         if !init_git_commit(&repo.0, &[("a.txt", "head\n")]) {
@@ -2490,6 +2637,60 @@ mod tests {
             "user-dirty\n"
         );
         assert!(store.status("s1", &cwd).unwrap().files.is_empty());
+        assert_eq!(store.roots("s1"), vec![key(&module.0)]);
+    }
+
+    #[test]
+    fn external_repo_edits_are_reviewed_alongside_a_git_turn() {
+        let project = tmp("ext-turn-project");
+        let module = tmp("ext-turn-module");
+        if !init_git_commit(&project.0, &[("p.txt", "head\n")])
+            || !init_git_commit(&module.0, &[("a.txt", "head\n"), ("b.txt", "head\n")])
+        {
+            return;
+        }
+        let cwd = project.0.to_string_lossy().into_owned();
+        let (_root, store) = store();
+        store.begin_turn("s1", &cwd, "turn").unwrap();
+        edit(
+            &store,
+            "s1",
+            &cwd,
+            &project.0.join("p.txt"),
+            Some("agent\n"),
+        );
+        edit(&store, "s1", &cwd, &module.0.join("a.txt"), Some("agent\n"));
+        edit(&store, "s1", &cwd, &module.0.join("b.txt"), Some("agent\n"));
+        store.finish_turn("s1", &cwd, "turn").unwrap();
+
+        // The turn review owns project files; the external repository keeps
+        // its own manifest under absolute keys.
+        let a = key(&module.0.join("a.txt"));
+        let b = key(&module.0.join("b.txt"));
+        let status = store.status("s1", &cwd).unwrap();
+        assert_eq!(relatives(&status), vec!["p.txt", a.as_str(), b.as_str()]);
+        assert!(status.files.iter().all(|file| file.undoable));
+        assert_eq!(store.roots("s1"), vec![key(&module.0)]);
+        assert_eq!(
+            store.file_diff("s1", &cwd, "p.txt").unwrap().current,
+            "agent\n"
+        );
+        assert_eq!(store.file_diff("s1", &cwd, &a).unwrap().original, "head\n");
+
+        store.keep("s1", &cwd, Some(&b)).unwrap();
+        assert_eq!(
+            relatives(&store.status("s1", &cwd).unwrap()),
+            vec!["p.txt", a.as_str()]
+        );
+        store.undo("s1", &cwd, None).unwrap();
+        assert!(store.status("s1", &cwd).unwrap().files.is_empty());
+        for path in [project.0.join("p.txt"), module.0.join("a.txt")] {
+            assert_eq!(std::fs::read_to_string(path).unwrap(), "head\n");
+        }
+        assert_eq!(
+            std::fs::read_to_string(module.0.join("b.txt")).unwrap(),
+            "agent\n"
+        );
         assert_eq!(store.roots("s1"), vec![key(&module.0)]);
     }
 
