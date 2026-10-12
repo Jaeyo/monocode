@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { CheckList, RefreshCw } from "../../../shared/ui/icons";
+import { CheckList, Plus, RefreshCw } from "../../../shared/ui/icons";
 import { OverlayNav } from "../../../app/shell/TitleBar";
 import { WindowControls } from "../../../app/shell/WindowControls";
 import { IS_MAC } from "../../../platform/tauri/platform";
+import { allTasks, type Task } from "../model/tasks";
 import { refreshTasks, useTasks } from "../model/tasksStore";
 import { promptForTasksRoot } from "../model/tasksRoot";
+import { takeTaskUndo } from "../model/taskActions";
+import { TaskBoardList } from "./TaskBoardList";
 
 type Props = {
   besideRail?: boolean;
@@ -12,6 +15,27 @@ type Props = {
   onClose: () => void;
   onToggleSidebar?: () => void;
 };
+
+// Kept across visits, like the Notes selection.
+let rememberedTaskId: string | null = null;
+
+function isEditable(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable ||
+      target.closest("input, textarea, select, [contenteditable='true']") !==
+        null)
+  );
+}
+
+/** A menu or dialog that should take Escape before the view does. */
+function overlayOpen(): boolean {
+  return (
+    document.querySelector(
+      "[role='menu'], [role='dialog'], [data-dialog-popover]",
+    ) !== null
+  );
+}
 
 export function TasksView({
   besideRail = false,
@@ -23,10 +47,37 @@ export function TasksView({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(rememberedTaskId);
+  const [creatingIn, setCreatingIn] = useState<string | null>(null);
+
+  const board = tasks.board;
+  const selected: Task | null =
+    allTasks(board).find((task) => task.id === selectedId) ?? null;
+
+  useEffect(() => {
+    rememberedTaskId = selectedId;
+  }, [selectedId]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (event.defaultPrevented || event.isComposing) return;
+      const mod = IS_MAC ? event.metaKey : event.ctrlKey;
+      if (
+        mod &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === "z" &&
+        !isEditable(event.target)
+      ) {
+        const undo = takeTaskUndo();
+        if (!undo) return;
+        event.preventDefault();
+        void undo.run();
+        return;
+      }
+      if (event.key !== "Escape" || isEditable(event.target) || overlayOpen()) {
+        return;
+      }
       event.preventDefault();
       onCloseRef.current();
     };
@@ -42,6 +93,8 @@ export function TasksView({
       setRefreshing(false);
     }
   };
+
+  const firstColumn = board?.columns[0]?.name ?? null;
 
   return (
     <div
@@ -66,6 +119,17 @@ export function TasksView({
           />
           <span className="min-w-0 truncate text-content">Tasks</span>
         </div>
+        {board && firstColumn ? (
+          <button
+            type="button"
+            title={`New task in ${firstColumn}`}
+            aria-label="New task"
+            onClick={() => setCreatingIn(firstColumn)}
+            className="mr-1 grid size-7 place-items-center rounded-md text-content/50 hover:bg-content/10 hover:text-content"
+          >
+            <Plus className="size-3.5" strokeWidth={1.75} />
+          </button>
+        ) : null}
         {tasks.root ? (
           <button
             type="button"
@@ -83,53 +147,42 @@ export function TasksView({
         ) : null}
         {IS_MAC ? null : <WindowControls />}
       </div>
-      <TasksBody />
-    </div>
-  );
-}
-
-function TasksBody() {
-  const tasks = useTasks();
-  if (tasks.status === "unconfigured") return <TasksSetup />;
-  if (tasks.status === "missing") {
-    return (
-      <TasksNotice
-        title="The tasks folder cannot be found"
-        body={`${tasks.root ?? ""} is missing. If it lives on a disk that is not connected, connect it and try again.`}
-        primary={{ label: "Try again", run: () => void refreshTasks() }}
-        secondary={{
-          label: "Choose another folder…",
-          run: () => void promptForTasksRoot(),
-        }}
-      />
-    );
-  }
-  if (tasks.status === "error") {
-    return (
-      <TasksNotice
-        title="Tasks could not be read"
-        body={tasks.error ?? ""}
-        primary={{ label: "Try again", run: () => void refreshTasks() }}
-      />
-    );
-  }
-  if (!tasks.board) {
-    return <div className="flex-1" aria-busy="true" />;
-  }
-  return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-      {tasks.board.columns.map((column) => (
-        <section key={column.name} className="mb-4">
-          <h2 className="text-[12px] font-medium text-content/60">
-            {column.name}
-          </h2>
-          {column.tasks.map((task) => (
-            <div key={task.id} className="py-1 text-[13px]">
-              {task.title}
-            </div>
-          ))}
-        </section>
-      ))}
+      {tasks.status === "unconfigured" ? (
+        <TasksSetup />
+      ) : tasks.status === "missing" ? (
+        <TasksNotice
+          title="The tasks folder cannot be found"
+          body={`${tasks.root ?? ""} is missing. If it lives on a disk that is not connected, connect it and try again.`}
+          primary={{ label: "Try again", run: () => void refreshTasks() }}
+          secondary={{
+            label: "Choose another folder…",
+            run: () => void promptForTasksRoot(),
+          }}
+        />
+      ) : tasks.status === "error" ? (
+        <TasksNotice
+          title="Tasks could not be read"
+          body={tasks.error ?? ""}
+          primary={{ label: "Try again", run: () => void refreshTasks() }}
+        />
+      ) : !board ? (
+        <div className="flex-1" aria-busy="true" />
+      ) : (
+        <div className="flex min-h-0 min-w-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <TaskBoardList
+              board={board}
+              selectedId={selected?.id ?? null}
+              visible={null}
+              forceOpen={false}
+              creatingIn={creatingIn}
+              onCreatingIn={setCreatingIn}
+              onSelect={(task) => setSelectedId(task.id)}
+              onCreated={(task) => setSelectedId(task.id)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
