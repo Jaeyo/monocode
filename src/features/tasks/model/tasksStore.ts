@@ -126,7 +126,8 @@ function setBoard(board: TaskBoard) {
   setState({ board, status: "ready", error: null });
 }
 
-function replaceTask(previous: Pick<Task, "id" | "path">, next: Task) {
+/** Shows a task the backend returned, in place of `previous`. */
+export function replaceTask(previous: Pick<Task, "id" | "path">, next: Task) {
   const board = state.board;
   if (!board) return;
   let placed = false;

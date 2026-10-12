@@ -539,6 +539,7 @@ pub fn run() {
             tasks::tasks_update,
             tasks::tasks_move,
             tasks::tasks_reorder,
+            tasks::tasks_save_image,
             tasks::tasks_delete,
             tasks::tasks_restore,
             tasks::tasks_trash_flush,

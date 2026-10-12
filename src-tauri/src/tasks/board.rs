@@ -779,6 +779,78 @@ pub fn reorder(root: &Path, column: &str, ids: &[String]) -> Result<Board, Strin
     load(root)
 }
 
+// ---- images -------------------------------------------------------------------
+
+const IMAGE_MAX_BYTES: u64 = 20 * 1024 * 1024;
+const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedImage {
+    pub name: String,
+    /// Relative to the task file, so other markdown tools show it too:
+    /// `../.assets/<id>/<file>`. Every column sits at the same depth.
+    pub markdown_path: String,
+    /// The task after the save; it gains an id if it had none.
+    pub task: Task,
+}
+
+/// Copies an image into `.assets/<task id>/` for the task's document.
+pub fn save_image(root: &Path, id: &str, hint: &str, source: &str) -> Result<SavedImage, String> {
+    let source = PathBuf::from(source);
+    let meta = fs::metadata(&source).map_err(|e| format!("{}: {e}", source.display()))?;
+    if !meta.is_file() {
+        return Err("Not a file".into());
+    }
+    if meta.len() > IMAGE_MAX_BYTES {
+        return Err(format!(
+            "Image is too large (maximum {} MB).",
+            IMAGE_MAX_BYTES / 1024 / 1024
+        ));
+    }
+    let extension = source
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if !IMAGE_EXTENSIONS.contains(&extension.as_str()) {
+        return Err("Use a PNG, JPG, GIF, WebP, or SVG image.".into());
+    }
+    let task = if id.starts_with('~') {
+        mutate(root, id, hint, |_| Ok(None))?
+    } else {
+        let found = locate(root, id, hint)?;
+        task_at(root, &found.column, &found.path)
+    };
+    let display = source
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("image.{extension}"));
+    // Markdown links break on spaces and parentheses; keep the name plain.
+    let stem: String = source
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(60)
+        .collect();
+    let stored = format!("{}-{}.{extension}", now_millis(), stem.trim_matches('-'));
+    let dir = root.join(ASSETS_DIR).join(&task.id);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fs::copy(&source, dir.join(&stored)).map_err(|e| e.to_string())?;
+    Ok(SavedImage {
+        name: display,
+        markdown_path: format!("../{ASSETS_DIR}/{}/{stored}", task.id),
+        task,
+    })
+}
+
 // ---- delete and undo --------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1507,6 +1579,38 @@ mod tests {
         )
         .unwrap();
         assert_eq!(board.columns[0].name, "In Progress");
+    }
+
+    #[test]
+    fn images_land_beside_the_columns_and_give_the_task_an_id() {
+        let root = temp_root();
+        init(&root).unwrap();
+        fs::write(root.join("TODO/hand.md"), "memo\n").unwrap();
+        let source = root.join("my shot (1).PNG");
+        fs::write(&source, "png").unwrap();
+        let saved = save_image(
+            &root,
+            "~TODO/hand.md",
+            "TODO/hand.md",
+            &source.to_string_lossy(),
+        )
+        .unwrap();
+        assert!(saved.task.persisted);
+        assert_eq!(saved.name, "my shot (1).PNG");
+        let prefix = format!("../{ASSETS_DIR}/{}/", saved.task.id);
+        assert!(saved.markdown_path.starts_with(&prefix));
+        assert!(saved.markdown_path.ends_with("-my-shot--1.png"));
+        let stored = root.join("TODO").join(&saved.markdown_path);
+        assert_eq!(fs::read_to_string(stored).unwrap(), "png");
+        let text = root.join("x.txt");
+        fs::write(&text, "t").unwrap();
+        assert!(save_image(
+            &root,
+            &saved.task.id,
+            &saved.task.path,
+            &text.to_string_lossy()
+        )
+        .is_err());
     }
 
     #[test]

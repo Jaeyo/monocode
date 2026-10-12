@@ -83,6 +83,35 @@ function edit(current: Task, change: TaskEdit): Task {
       return { ...next, status: change.status };
     case "setTitle":
       return { ...next, title: change.title };
+    case "setDue":
+      return { ...next, due: change.due };
+    case "setPriority":
+      return { ...next, priority: change.priority };
+    case "setTags":
+      return { ...next, tags: change.tags };
+    case "addLink":
+      return { ...next, links: [...next.links, change.link] };
+    case "removeLink":
+      return { ...next, links: next.links.filter((l) => l.url !== change.url) };
+    case "addTodo":
+      next.todos.push({ text: change.text, done: false });
+      return next;
+    case "renameTodo":
+      next.todos[change.index] = {
+        ...next.todos[change.index],
+        text: change.newText,
+      };
+      return next;
+    case "removeTodo":
+      next.todos.splice(change.index, 1);
+      return next;
+    case "moveTodo": {
+      const [todo] = next.todos.splice(change.index, 1);
+      next.todos.splice(change.to, 0, todo);
+      return next;
+    }
+    case "saveDocument":
+      return { ...next, document: change.document.trim() };
     default:
       return next;
   }
@@ -212,6 +241,10 @@ Object.assign(window, {
         column.tasks.map((entry) => entry.title),
       ]),
     ),
+  taskNamed: (title: string) =>
+    (columns ?? [])
+      .flatMap((column) => column.tasks)
+      .find((entry) => entry.title === title),
 });
 
 localStorage.clear();

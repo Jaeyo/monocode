@@ -131,3 +131,102 @@ test("renames a column from its menu", async ({ page }) => {
   await input.press("Enter");
   await expect(section(page, "Doing")).toBeVisible();
 });
+
+type StoredTask = {
+  status: string;
+  todos: { text: string; done: boolean }[];
+  tags: string[];
+  priority: string | null;
+  document: string;
+  links: { url: string }[];
+};
+
+const stored = (page: Page, title: string) =>
+  page.evaluate(
+    (name) =>
+      (
+        window as unknown as { taskNamed: (title: string) => StoredTask }
+      ).taskNamed(name),
+    title,
+  );
+
+test("edits fields in the side panel", async ({ page }) => {
+  await choose(page);
+  await card(page, "Write the spec").click();
+  const panel = page.getByRole("complementary", {
+    name: "Task: Write the spec",
+  });
+  await expect(panel).toBeVisible();
+
+  const status = panel.getByRole("textbox", { name: "Status" });
+  await status.fill("Reviewing with the team");
+  await status.press("Enter");
+  await expect
+    .poll(async () => (await stored(page, "Write the spec")).status)
+    .toBe("Reviewing with the team");
+  await expect(card(page, "Write the spec")).toContainText(
+    "Reviewing with the team",
+  );
+
+  await panel.getByRole("combobox", { name: "Priority" }).selectOption("low");
+  await expect
+    .poll(async () => (await stored(page, "Write the spec")).priority)
+    .toBe("low");
+
+  const tag = panel.getByRole("combobox", { name: "Add tag" });
+  await tag.fill("backend");
+  await tag.press("Enter");
+  await expect
+    .poll(async () => (await stored(page, "Write the spec")).tags)
+    .toEqual(["backend"]);
+
+  const todo = panel.getByRole("textbox", { name: "Add todo" });
+  await todo.fill("Ship it");
+  await todo.press("Enter");
+  await expect(card(page, "Write the spec")).toContainText("1/3");
+
+  await panel
+    .getByRole("button", { name: "Delete todo Draft" })
+    .click({ force: true });
+  await expect
+    .poll(async () =>
+      (await stored(page, "Write the spec")).todos.map((t) => t.text),
+    )
+    .toEqual(["Review", "Ship it"]);
+
+  await panel
+    .getByRole("button", { name: "Remove link Spec PR" })
+    .click({ force: true });
+  await expect
+    .poll(async () => (await stored(page, "Write the spec")).links)
+    .toEqual([]);
+});
+
+test("saves the document only on save", async ({ page }) => {
+  await choose(page);
+  await card(page, "Fix login").click();
+  const panel = page.getByRole("complementary", { name: "Task: Fix login" });
+  const editor = panel.getByRole("textbox", { name: "Task document" });
+  await editor.fill("# Plan\n\nRotate the session keys.");
+  await expect(panel.getByText("Unsaved")).toBeVisible();
+  expect((await stored(page, "Fix login")).document).toBe("");
+  await editor.press("ControlOrMeta+s");
+  await expect(panel.getByText("Unsaved")).toHaveCount(0);
+  expect((await stored(page, "Fix login")).document).toBe(
+    "# Plan\n\nRotate the session keys.",
+  );
+});
+
+test("renames a task from the panel", async ({ page }) => {
+  await choose(page);
+  await card(page, "Fix login").click();
+  const panel = page.getByRole("complementary", { name: "Task: Fix login" });
+  await panel.getByRole("button", { name: "Fix login" }).click();
+  const input = panel.getByRole("textbox", { name: "Task title" });
+  await input.fill("Fix sign-in");
+  await input.press("Enter");
+  await expect(card(page, "Fix sign-in")).toBeVisible();
+  await expect(
+    page.getByRole("complementary", { name: "Task: Fix sign-in" }),
+  ).toBeVisible();
+});

@@ -8,6 +8,7 @@ import { refreshTasks, useTasks } from "../model/tasksStore";
 import { promptForTasksRoot } from "../model/tasksRoot";
 import { takeTaskUndo } from "../model/taskActions";
 import { TaskBoardList } from "./TaskBoardList";
+import { TaskDetail } from "./TaskDetail";
 
 type Props = {
   besideRail?: boolean;
@@ -17,7 +18,8 @@ type Props = {
 };
 
 // Kept across visits, like the Notes selection.
-let rememberedTaskId: string | null = null;
+type Selection = Pick<Task, "id" | "path">;
+let rememberedSelection: Selection | null = null;
 
 function isEditable(target: EventTarget | null): boolean {
   return (
@@ -47,16 +49,31 @@ export function TasksView({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(rememberedTaskId);
+  const [selection, setSelection] = useState<Selection | null>(
+    rememberedSelection,
+  );
   const [creatingIn, setCreatingIn] = useState<string | null>(null);
 
   const board = tasks.board;
   const selected: Task | null =
-    allTasks(board).find((task) => task.id === selectedId) ?? null;
+    // By id, or by path once a file without an id has been given one.
+    allTasks(board).find((task) => task.id === selection?.id) ??
+    allTasks(board).find((task) => task.path === selection?.path) ??
+    null;
 
+  // Follow the selected task as it gains an id, is renamed, or moves.
+  const selectedId = selected?.id;
+  const selectedPath = selected?.path;
   useEffect(() => {
-    rememberedTaskId = selectedId;
-  }, [selectedId]);
+    if (selectedId === undefined || selectedPath === undefined) {
+      rememberedSelection = selection;
+      return;
+    }
+    rememberedSelection = { id: selectedId, path: selectedPath };
+    if (selection?.id !== selectedId || selection?.path !== selectedPath) {
+      setSelection({ id: selectedId, path: selectedPath });
+    }
+  }, [selectedId, selectedPath, selection]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -177,10 +194,17 @@ export function TasksView({
               forceOpen={false}
               creatingIn={creatingIn}
               onCreatingIn={setCreatingIn}
-              onSelect={(task) => setSelectedId(task.id)}
-              onCreated={(task) => setSelectedId(task.id)}
+              onSelect={(task) => setSelection(task)}
+              onCreated={(task) => setSelection(task)}
             />
           </div>
+          {selected ? (
+            <TaskDetail
+              board={board}
+              task={selected}
+              onClose={() => setSelection(null)}
+            />
+          ) : null}
         </div>
       )}
     </div>

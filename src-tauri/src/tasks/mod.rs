@@ -79,6 +79,19 @@ pub async fn tasks_reorder(
 }
 
 #[tauri::command]
+pub async fn tasks_save_image(
+    root: String,
+    id: String,
+    path: String,
+    source_path: String,
+) -> Result<board::SavedImage, String> {
+    with_root(root, move |root| {
+        board::save_image(root, &id, &path, &source_path)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn tasks_delete(root: String, id: String, path: String) -> Result<String, String> {
     with_root(root, move |root| board::delete(root, &id, &path)).await
 }
