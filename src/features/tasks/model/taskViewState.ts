@@ -41,6 +41,21 @@ export function setColumnCollapsed(
   }
 }
 
+export const TASK_SELECT_EVENT = "monocode:task-select";
+let pendingSelection: Pick<Task, "id" | "path"> | null = null;
+
+/** Asks the Tasks view to show `task`, whether or not it is open yet. */
+export function requestTaskSelection(task: Pick<Task, "id" | "path">): void {
+  pendingSelection = { id: task.id, path: task.path };
+  window.dispatchEvent(new CustomEvent(TASK_SELECT_EVENT));
+}
+
+export function takeTaskSelection(): Pick<Task, "id" | "path"> | null {
+  const selection = pendingSelection;
+  pendingSelection = null;
+  return selection;
+}
+
 /** Absolute path of a task file. */
 export function taskFilePath(root: string, task: Pick<Task, "path">): string {
   return `${root.replace(/\/+$/, "")}/${task.path}`;

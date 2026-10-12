@@ -89,6 +89,8 @@ import { Sidebar } from "./shell/Sidebar";
 import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
 import { ToastHost } from "../shared/ui/Toasts";
 import { startTasks } from "../features/tasks/model/tasksStore";
+import type { Task } from "../features/tasks/model/tasks";
+import { requestTaskSelection } from "../features/tasks/model/taskViewState";
 import { HarnessUpdateNotice } from "../features/providers/ui/HarnessUpdateNotice";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
 import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDialog";
@@ -11827,6 +11829,14 @@ function Workspace({
     setTasksViewOpen(false);
   }, []);
 
+  const onOpenTaskFromElsewhere = useCallback(
+    (task: Pick<Task, "id" | "path">) => {
+      requestTaskSelection(task);
+      onOpenTasks();
+    },
+    [onOpenTasks],
+  );
+
   const onOpenAutomations = useCallback(() => {
     workspaceNavigation.cancel();
     startTransition(() => {
@@ -13505,6 +13515,7 @@ function Workspace({
                   onRepairChecks={onRepairChecks}
                   onOpenSession={onOpenInboxSession}
                   onOpenIntegrations={onOpenInboxIntegrations}
+                  onOpenTask={onOpenTaskFromElsewhere}
                 />
               ) : null}
               {tasksViewOpen ? (

@@ -9,6 +9,8 @@ import type {
   TaskColumn,
   TaskEdit,
 } from "../../src/features/tasks/model/tasks";
+import type { InboxItem } from "../../src/features/inbox/model/githubTasks";
+import { InboxTaskControls } from "../../src/features/tasks/ui/TaskInboxActions";
 import "../../src/styles/index.css";
 
 // An in-memory stand-in for the Rust tasks commands: enough of their
@@ -249,9 +251,44 @@ Object.assign(window, {
 
 localStorage.clear();
 startTasks();
+// The Inbox detail header's task controls, for an item no task links yet.
+const inboxItem: InboxItem = {
+  kind: "issue",
+  number: 42,
+  title: "Crash on start",
+  url: "https://github.com/o/r/issues/42",
+  state: "open",
+  updatedAt: "2026-10-01T00:00:00Z",
+  labels: [],
+  assignees: [],
+  draft: false,
+  repo: "o/r",
+  projectPath: "/p",
+  provider: "github",
+};
+const opened: string[] = [];
+Object.assign(window, { opened });
+
 createRoot(document.getElementById("root")!).render(
-  <div style={{ display: "flex", height: "100vh" }}>
-    <TasksView besideRail onClose={() => undefined} />
+  <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+    <div
+      data-inbox-fixture
+      style={{
+        display: "flex",
+        gap: 8,
+        padding: 8,
+        borderBottom: "1px solid #333",
+      }}
+    >
+      <InboxTaskControls
+        item={inboxItem}
+        onOpenTask={(task) => opened.push(task.title)}
+        className="flex h-7 items-center gap-1.5 rounded-md border border-content/15 px-2 text-[12px] text-content/80"
+      />
+    </div>
+    <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+      <TasksView besideRail onClose={() => undefined} />
+    </div>
     <ToastHost />
   </div>,
 );

@@ -1,4 +1,15 @@
 import { useGithubPrChecks } from "../hooks/useGithubPrChecks";
+import type { Task } from "../../tasks/model/tasks";
+import { useTasks } from "../../tasks/model/tasksStore";
+import { useTasksByInboxKey } from "../../tasks/model/taskInbox";
+import {
+  InboxTaskBadge,
+  InboxTaskControls,
+  InboxTaskPopover,
+  inboxTaskMenuItems,
+  pickInboxTaskMenu,
+  type OpenTask,
+} from "../../tasks/ui/TaskInboxActions";
 import { summarizePrChecks } from "../model/githubPrChecks";
 import type { CiRepairRequest } from "../model/ciRepair";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -248,6 +259,7 @@ const MAX_WIDTH = 420;
 // outline variant lines up with the filled and ghost ones.
 const ACTION = "inline-flex items-center gap-1.5 rounded-md px-3 text-[12px]";
 const ACTION_FILLED = `${ACTION} h-6.5 bg-content text-background-base hover:bg-content/80`;
+const NO_TASKS: readonly Task[] = [];
 const ACTION_OUTLINE = `${ACTION} h-7 border border-content/15 text-content/80 hover:bg-content/5`;
 const ACTION_PANEL_HEADER = `${ACTION} h-6.5 text-content/70 hover:bg-content/10 hover:text-content`;
 const ACTION_GHOST = `${ACTION} h-7 text-content/70 hover:bg-content/10 hover:text-content`;
@@ -478,6 +490,8 @@ type Props = {
   target?: LinkedWorkItem | null;
   /** Opens Settings on the card where the given source is connected. */
   onOpenIntegrations: (source: ConnectableInboxSource) => void;
+  /** Shows a task in the Tasks view; enables the task actions. */
+  onOpenTask?: OpenTask;
 };
 
 export function InboxView({
@@ -497,8 +511,17 @@ export function InboxView({
   onOpenSession,
   target = null,
   onOpenIntegrations,
+  onOpenTask,
 }: Props) {
   const [discussionOpen, setDiscussionOpen] = useState(false);
+  const tasksByKey = useTasksByInboxKey();
+  const tasksDoneColumn = useTasks().board?.doneColumn ?? null;
+  const [taskPopover, setTaskPopover] = useState<{
+    mode: "create" | "add";
+    item: InboxItem;
+    x: number;
+    y: number;
+  } | null>(null);
   const listLock = useLockOverscroll<HTMLDivElement>();
   const listScrollRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLLIElement>(null);
@@ -909,6 +932,7 @@ export function InboxView({
       searchInput,
       Date.now(),
       source,
+      (item) => tasksByKey.has(inboxItemKey(item)),
     );
     if (!target || source !== "github") return visible;
     const targeted =
@@ -927,6 +951,7 @@ export function InboxView({
     sourceAvailable,
     target,
     targetItem,
+    tasksByKey,
   ]);
 
   const inboxSeenTick = useInboxSeenTick();
@@ -1230,10 +1255,30 @@ export function InboxView({
           },
         ] satisfies ExplorerMenuItem[])
       : []),
+    ...(onOpenTask && itemMenuItem
+      ? inboxTaskMenuItems(tasksByKey.get(inboxItemKey(itemMenuItem)) ?? [])
+      : []),
   ];
   const onItemMenuPick = (id: string) => {
     const key = itemMenu?.key;
     setItemMenu(null);
+    if (id.startsWith("task:") && itemMenu && itemMenuItem && onOpenTask) {
+      const mode = pickInboxTaskMenu(
+        id,
+        itemMenuItem,
+        tasksByKey.get(inboxItemKey(itemMenuItem)) ?? [],
+        onOpenTask,
+      );
+      if (mode) {
+        setTaskPopover({
+          mode,
+          item: itemMenuItem,
+          x: itemMenu.x,
+          y: itemMenu.y,
+        });
+      }
+      return;
+    }
     if (
       itemMenu &&
       itemMenuItem &&
@@ -1499,6 +1544,8 @@ export function InboxView({
                     active={selected != null && key === inboxItemKey(selected)}
                     {...projectVisuals(item.projectPath)}
                     relatedSessionCount={relatedSessions.length}
+                    tasks={tasksByKey.get(key) ?? NO_TASKS}
+                    tasksDoneColumn={tasksDoneColumn}
                     onSelect={() => {
                       if (featuredSortable.consumeClick()) return;
                       markInboxItemSeen({
@@ -1641,6 +1688,7 @@ export function InboxView({
                 selected ? relatedSessionsForInboxItem(selected, sessions) : []
               }
               onDiscuss={() => setDiscussionOpen(true)}
+              onOpenTask={onOpenTask}
               onStart={onStart}
               repairSessions={repairSessions}
               onRepairChecks={onRepairChecks}
@@ -1670,6 +1718,15 @@ export function InboxView({
           ariaLabel="Inbox item actions"
           onPick={onItemMenuPick}
           onClose={() => setItemMenu(null)}
+        />
+      ) : null}
+      {taskPopover && onOpenTask ? (
+        <InboxTaskPopover
+          anchor={{ x: taskPopover.x, y: taskPopover.y }}
+          item={taskPopover.item}
+          mode={taskPopover.mode}
+          onClose={() => setTaskPopover(null)}
+          onOpenTask={onOpenTask}
         />
       ) : null}
       {issueConfirm ? (
@@ -1899,6 +1956,7 @@ function InboxDetailBody({
   revision = 0,
   relatedSessions,
   onDiscuss,
+  onOpenTask,
   onStart,
   repairSessions,
   onRepairChecks,
@@ -1911,6 +1969,7 @@ function InboxDetailBody({
   revision?: number;
   relatedSessions: readonly SessionSummary[];
   onDiscuss?: () => void;
+  onOpenTask?: OpenTask;
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
@@ -1934,6 +1993,7 @@ function InboxDetailBody({
       revision={revision}
       relatedSessions={relatedSessions}
       onDiscuss={onDiscuss}
+      onOpenTask={onOpenTask}
       onStart={onStart}
       repairSessions={repairSessions}
       onRepairChecks={onRepairChecks}
@@ -2081,6 +2141,8 @@ function InboxCard({
   mascotName,
   mascotColor,
   relatedSessionCount,
+  tasks = NO_TASKS,
+  tasksDoneColumn = null,
   onSelect,
   onPointerDown,
   onContextMenu,
@@ -2095,6 +2157,9 @@ function InboxCard({
   mascotName: string | null;
   mascotColor: string;
   relatedSessionCount: number;
+  /** Tasks that link this item. */
+  tasks?: readonly Task[];
+  tasksDoneColumn?: string | null;
   onSelect: () => void;
   onPointerDown?: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onContextMenu: (event: ReactMouseEvent<HTMLButtonElement>) => void;
@@ -2152,8 +2217,9 @@ function InboxCard({
             {attentionLabel ? ` · ${attentionLabel}` : ""}
           </span>
         </span>
-        {featured || relatedSessionCount > 0 || time || unseen ? (
+        {featured || relatedSessionCount > 0 || time || unseen || tasks.length ? (
           <span className="flex shrink-0 items-center gap-1.5">
+            <InboxTaskBadge tasks={tasks} doneColumn={tasksDoneColumn} />
             {featured ? (
               <Star
                 aria-hidden
@@ -2759,6 +2825,7 @@ export function InboxDetail({
   mode = "inbox",
   visible = true,
   onDiscuss,
+  onOpenTask,
   onStart,
   repairSessions,
   onRepairChecks,
@@ -2773,6 +2840,7 @@ export function InboxDetail({
   mode?: "inbox" | "panel";
   visible?: boolean;
   onDiscuss?: () => void;
+  onOpenTask?: OpenTask;
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
@@ -3613,6 +3681,13 @@ export function InboxDetail({
                     <MessageSquare className="size-3.5" strokeWidth={1.75} />{" "}
                     Ask
                   </button>
+                ) : null}
+                {onOpenTask ? (
+                  <InboxTaskControls
+                    item={item}
+                    onOpenTask={onOpenTask}
+                    className={ACTION_OUTLINE}
+                  />
                 ) : null}
                 {panel ? null : (
                   <button

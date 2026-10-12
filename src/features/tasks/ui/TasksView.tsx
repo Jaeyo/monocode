@@ -7,6 +7,7 @@ import { allTasks, type Task } from "../model/tasks";
 import { refreshTasks, useTasks } from "../model/tasksStore";
 import { promptForTasksRoot } from "../model/tasksRoot";
 import { takeTaskUndo } from "../model/taskActions";
+import { TASK_SELECT_EVENT, takeTaskSelection } from "../model/taskViewState";
 import { TaskBoardList } from "./TaskBoardList";
 import { TaskDetail } from "./TaskDetail";
 
@@ -50,9 +51,19 @@ export function TasksView({
   onCloseRef.current = onClose;
   const [refreshing, setRefreshing] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(
-    rememberedSelection,
+    () => takeTaskSelection() ?? rememberedSelection,
   );
   const [creatingIn, setCreatingIn] = useState<string | null>(null);
+
+  // Another view (Inbox, a session chip) asked to show a task.
+  useEffect(() => {
+    const onSelect = () => {
+      const next = takeTaskSelection();
+      if (next) setSelection(next);
+    };
+    window.addEventListener(TASK_SELECT_EVENT, onSelect);
+    return () => window.removeEventListener(TASK_SELECT_EVENT, onSelect);
+  }, []);
 
   const board = tasks.board;
   const selected: Task | null =

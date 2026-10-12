@@ -230,3 +230,47 @@ test("renames a task from the panel", async ({ page }) => {
     page.getByRole("complementary", { name: "Task: Fix sign-in" }),
   ).toBeVisible();
 });
+
+test("offers setup from the Inbox before a folder is chosen", async ({
+  page,
+}) => {
+  await page.goto("/tests/browser/tasks-view.html");
+  const inbox = page.locator("[data-inbox-fixture]");
+  await inbox.getByRole("button", { name: "Add to Task" }).click();
+  await expect(page.getByText("Tasks are not set up yet.")).toBeVisible();
+});
+
+test("links an Inbox item to an existing task and to a new one", async ({
+  page,
+}) => {
+  await choose(page);
+  const inbox = page.locator("[data-inbox-fixture]");
+  await inbox.getByRole("button", { name: "Add to Task" }).click();
+  const picker = page.getByRole("dialog", { name: "Add to task" });
+  await picker.getByRole("textbox", { name: "Find a task" }).fill("fix");
+  await picker.getByRole("option", { name: /Fix login/ }).click();
+  await expect(page.getByText("Linked to “Fix login”.")).toBeVisible();
+  await expect(card(page, "Fix login")).toContainText("Crash on start");
+  // The linked task shows in the header and opens from there.
+  await inbox.getByRole("button", { name: "Fix login" }).click();
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { opened: string[] }).opened,
+    ),
+  ).toEqual(["Fix login"]);
+
+  await inbox.getByRole("button", { name: "Add to another Task" }).click();
+  await page
+    .getByRole("dialog", { name: "Add to task" })
+    .getByRole("button", { name: "New task" })
+    .click();
+  const create = page.getByRole("dialog", { name: "Create task" });
+  await create
+    .getByRole("textbox", { name: "Task title" })
+    .fill("Crash triage");
+  await create.getByRole("button", { name: "Create" }).click();
+  await expect(card(page, "Crash triage")).toContainText("Crash on start");
+  await expect(
+    inbox.getByRole("button", { name: "Crash triage" }),
+  ).toBeVisible();
+});

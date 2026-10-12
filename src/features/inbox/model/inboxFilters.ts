@@ -20,6 +20,9 @@ export type InboxStatusFilter = {
   merged: boolean;
 };
 
+/** Whether an item belongs to a task in the Tasks folder. */
+export type InboxTaskFilter = "all" | "linked" | "unlinked";
+
 export type InboxFilters = {
   assignedToMe: boolean;
   hiddenProjects: string[];
@@ -28,6 +31,7 @@ export type InboxFilters = {
   hiddenKinds: InboxKind[];
   time: InboxTimeFilter;
   status: InboxStatusFilter;
+  task: InboxTaskFilter;
   /** View option, not a filter: groups the list by repository, project or team. */
   grouped: boolean;
 };
@@ -57,6 +61,7 @@ export const DEFAULT_INBOX_FILTERS: InboxFilters = {
   hiddenKinds: [],
   time: "all",
   status: DEFAULT_INBOX_STATUS_FILTER,
+  task: "all",
   grouped: true,
 };
 
@@ -218,6 +223,10 @@ export function loadInboxFilters(): InboxFilters {
         closed: parsed.status?.closed === true,
         merged: parsed.status?.merged === true,
       },
+      task:
+        parsed.task === "linked" || parsed.task === "unlinked"
+          ? parsed.task
+          : "all",
       grouped: parsed.grouped !== false,
     };
   } catch {
@@ -270,6 +279,7 @@ export function hasActiveInboxFilters(
       : source !== "jira" && filters.hiddenProjects.length > 0) ||
     (isTrackerSource(source) ? false : filters.hiddenKinds.length > 0) ||
     filters.time !== "all" ||
+    filters.task !== "all" ||
     statusActive
   );
 }
@@ -380,14 +390,29 @@ export function filterInboxByProvider(
   return items.filter((item) => item.provider === source);
 }
 
+export function filterInboxByTask(
+  items: readonly InboxItem[],
+  filter: InboxTaskFilter,
+  linked: ((item: InboxItem) => boolean) | undefined,
+): InboxItem[] {
+  if (filter === "all" || !linked) return [...items];
+  return items.filter((item) => linked(item) === (filter === "linked"));
+}
+
 export function applyInboxFilters(
   items: readonly InboxItem[],
   filters: InboxFilters,
   query: string,
   now = Date.now(),
   source?: InboxSource,
+  /** Whether an item is linked from a task; without it the task filter is off. */
+  linkedToTask?: (item: InboxItem) => boolean,
 ): InboxItem[] {
-  const scoped = source ? filterInboxByProvider(items, source) : [...items];
+  const scoped = filterInboxByTask(
+    source ? filterInboxByProvider(items, source) : [...items],
+    filters.task,
+    linkedToTask,
+  );
   const hiddenProjects =
     isTrackerSource(source) ||
     ((source === "gitlab" || source === "azuredevops") && filters.assignedToMe)
