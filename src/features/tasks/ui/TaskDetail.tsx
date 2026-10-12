@@ -42,6 +42,9 @@ import {
   type TaskLink,
 } from "../model/tasks";
 import { replaceTask, updateTask } from "../model/tasksStore";
+import { linkStatus, useLinkStatusRevision } from "../model/taskLinkStatus";
+import { useGithubPrChecks } from "../../inbox/hooks/useGithubPrChecks";
+import { summarizePrChecks } from "../../inbox/model/githubPrChecks";
 import { deleteTaskWithUndo, moveTaskWithUndo } from "../model/taskActions";
 import { taskFilePath } from "../model/taskViewState";
 import {
@@ -286,6 +289,7 @@ export function TaskDetail({ board, task, onClose, children }: Props) {
           <Field label="Links">
             <LinksEditor
               links={task.links}
+              cwd={task.project ?? board.root}
               disabled={readOnly}
               onAdd={(link) => edit({ type: "addLink", link })}
               onRemove={(url) => edit({ type: "removeLink", url })}
@@ -475,13 +479,76 @@ export function linkFromUrl(raw: string): TaskLink | null {
   };
 }
 
+const CHECK_STYLE: Record<string, string> = {
+  pass: "text-emerald-400",
+  fail: "text-red-400",
+  pending: "text-amber-400",
+  neutral: "text-content/40",
+  error: "text-content/40",
+  loading: "text-content/30",
+};
+
+/**
+ * CI for one open pull request, loaded once when the panel shows it — the
+ * list never fetches checks, so the GitHub budget stays with the Inbox.
+ */
+function PrChecksMark({
+  repo,
+  number,
+  cwd,
+  link,
+}: {
+  repo: string;
+  number: number;
+  cwd: string;
+  link: TaskLink;
+}) {
+  useLinkStatusRevision();
+  const state = linkStatus(link)?.state;
+  const open = state !== "merged" && state !== "closed";
+  const view = useGithubPrChecks({
+    cwd,
+    repo,
+    number,
+    enabled: open,
+    open,
+    poll: false,
+  });
+  if (!open) return null;
+  const summary = summarizePrChecks({
+    loading: view.loading,
+    error: view.error,
+    checks: view.checks?.checks ?? null,
+  });
+  const label =
+    summary.kind === "fail"
+      ? `${summary.failed} failing`
+      : summary.kind === "pass"
+        ? "checks pass"
+        : summary.kind === "pending"
+          ? "checks running"
+          : null;
+  if (!label) return null;
+  return (
+    <span
+      title={summary.description}
+      className={`shrink-0 text-[10px] ${CHECK_STYLE[summary.kind]}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 function LinksEditor({
   links,
+  cwd,
   disabled,
   onAdd,
   onRemove,
 }: {
   links: TaskLink[];
+  /** Where `gh` runs for links without a project of their own. */
+  cwd: string;
   disabled: boolean;
   onAdd: (link: TaskLink) => void;
   onRemove: (url: string) => void;
@@ -503,6 +570,17 @@ function LinksEditor({
             link={link}
             onOpen={(entry) => void openUrl(entry.url).catch(() => undefined)}
           />
+          {link.provider === "github" &&
+          link.kind === "pr" &&
+          link.repo &&
+          link.number != null ? (
+            <PrChecksMark
+              repo={link.repo}
+              number={link.number}
+              cwd={link.projectPath ?? cwd}
+              link={link}
+            />
+          ) : null}
           {disabled ? null : (
             <button
               type="button"

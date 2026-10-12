@@ -4,7 +4,8 @@ import { OverlayNav } from "../../../app/shell/TitleBar";
 import { WindowControls } from "../../../app/shell/WindowControls";
 import { IS_MAC } from "../../../platform/tauri/platform";
 import { allTasks, type Task } from "../model/tasks";
-import { refreshTasks, useTasks } from "../model/tasksStore";
+import { peekTasks, refreshTasks, useTasks } from "../model/tasksStore";
+import { refreshLinkStatuses } from "../model/taskLinkStatus";
 import { promptForTasksRoot } from "../model/tasksRoot";
 import { takeTaskUndo } from "../model/taskActions";
 import { TASK_SELECT_EVENT, takeTaskSelection } from "../model/taskViewState";
@@ -117,10 +118,18 @@ export function TasksView({
     setRefreshing(true);
     try {
       await refreshTasks();
+      await refreshLinkStatuses(peekTasks().board);
     } finally {
       setRefreshing(false);
     }
   };
+
+  // Link states load when Tasks opens (once the board is there) and on
+  // Refresh; never in the background.
+  const boardReady = board !== null;
+  useEffect(() => {
+    if (boardReady) void refreshLinkStatuses(peekTasks().board);
+  }, [boardReady]);
 
   const firstColumn = board?.columns[0]?.name ?? null;
 

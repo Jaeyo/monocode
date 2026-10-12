@@ -12,6 +12,15 @@ import {
   type TaskLink,
 } from "../model/tasks";
 import { updateTask } from "../model/tasksStore";
+import { moveTaskWithUndo } from "../model/taskActions";
+import {
+  dismissDoneSuggestion,
+  isDoneSuggestionDismissed,
+  linkStatus,
+  suggestsDone,
+  useLinkStatusRevision,
+  type LinkState,
+} from "../model/taskLinkStatus";
 
 const PROVIDERS = new Set<string>([
   "github",
@@ -28,6 +37,24 @@ export function linkLabel(link: TaskLink): string {
       ? `${link.repo ? `${link.repo}` : ""}#${link.number}`
       : link.repo);
   return link.title ? `${ref ? `${ref} ` : ""}${link.title}` : ref || link.url;
+}
+
+const LINK_STATE_STYLE: Record<LinkState, string> = {
+  open: "text-emerald-400",
+  draft: "text-content/45",
+  merged: "text-violet-400",
+  closed: "text-red-400",
+};
+
+function LinkStateMark({ link }: { link: TaskLink }) {
+  useLinkStatusRevision();
+  const status = linkStatus(link);
+  if (!status) return null;
+  return (
+    <span className={`shrink-0 text-[10px] ${LINK_STATE_STYLE[status.state]}`}>
+      {status.state}
+    </span>
+  );
 }
 
 export function TaskLinkChip({
@@ -55,7 +82,51 @@ export function TaskLinkChip({
         />
       ) : null}
       <span className="min-w-0 truncate">{linkLabel(link)}</span>
+      <LinkStateMark link={link} />
     </button>
+  );
+}
+
+/** "Move to Done?" once every linked pull request has finished. */
+function DoneSuggestion({
+  task,
+  doneColumn,
+}: {
+  task: Task;
+  doneColumn: string | null;
+}) {
+  useLinkStatusRevision();
+  if (!doneColumn || !suggestsDone(task, doneColumn)) return null;
+  if (isDoneSuggestionDismissed(task)) return null;
+  return (
+    <div
+      data-no-drag
+      className="flex items-center gap-2 rounded bg-violet-500/10 px-2 py-1 text-[11px] text-violet-300"
+    >
+      <span className="min-w-0 flex-1">
+        Linked pull requests are finished. Move to {doneColumn}?
+      </span>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          void moveTaskWithUndo(task, doneColumn, 0);
+        }}
+        className="shrink-0 rounded bg-violet-500/20 px-1.5 py-px font-medium hover:bg-violet-500/30"
+      >
+        Move
+      </button>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          dismissDoneSuggestion(task);
+        }}
+        className="shrink-0 rounded px-1.5 py-px text-violet-300/70 hover:bg-violet-500/20"
+      >
+        Dismiss
+      </button>
+    </div>
   );
 }
 
@@ -226,6 +297,7 @@ export function TaskCard({
           {task.status}
         </div>
       ) : null}
+      <DoneSuggestion task={task} doneColumn={doneColumn} />
       {task.todos.length > 0 ? (
         <ul className="flex flex-col gap-0.5 pt-0.5">
           {task.todos.map((todo, index) => (

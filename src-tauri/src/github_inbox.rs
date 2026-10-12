@@ -83,6 +83,111 @@ pub async fn git_github_inbox_probe(repos: Vec<String>) -> Result<GitHubInboxBat
         .map_err(|e| e.to_string())?
 }
 
+/// Items per state query. Each alias is one small lookup.
+const STATES_PER_QUERY: usize = 50;
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct GitHubItemRef {
+    pub repo: String,
+    pub kind: String,
+    pub number: i64,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubItemState {
+    pub repo: String,
+    pub kind: String,
+    pub number: i64,
+    /// `OPEN`, `CLOSED`, or `MERGED`.
+    pub state: String,
+    pub title: String,
+    pub updated_at: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubItemStates {
+    /// Items GitHub could not resolve (deleted, no access) are left out.
+    pub items: Vec<GitHubItemState>,
+    pub rate_limit: Option<GitHubRateLimit>,
+}
+
+/// Current state of specific issues and pull requests, a few GraphQL
+/// requests for any number of them. Tasks use it for items that have left the
+/// open-only Inbox list, such as merged pull requests.
+#[tauri::command]
+pub async fn git_github_item_states(items: Vec<GitHubItemRef>) -> Result<GitHubItemStates, String> {
+    tauri::async_runtime::spawn_blocking(move || item_states(&items, gh_graphql))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn item_states(items: &[GitHubItemRef], run: Runner) -> Result<GitHubItemStates, String> {
+    let valid: Vec<(GitHubItemRef, String, String)> = items
+        .iter()
+        .filter(|item| item.number > 0 && matches!(item.kind.as_str(), "issue" | "pr"))
+        .filter_map(|item| {
+            let (owner, name) = split_github_repo(&item.repo).ok()?;
+            Some((item.clone(), owner, name))
+        })
+        .collect();
+    let mut out = Vec::new();
+    let mut rate_limit = None;
+    let mut first_error = None;
+    let mut succeeded = valid.is_empty();
+    for chunk in valid.chunks(STATES_PER_QUERY) {
+        let mut params = Vec::new();
+        let mut blocks = String::new();
+        let mut fields = Vec::new();
+        for (index, (item, owner, name)) in chunk.iter().enumerate() {
+            params.push(format!("$o{index}: String!, $n{index}: String!"));
+            blocks.push_str(&format!(
+                "i{index}: repository(owner: $o{index}, name: $n{index}) {{ \
+                 issueOrPullRequest(number: {}) {{ \
+                 ... on Issue {{ state title updatedAt }} \
+                 ... on PullRequest {{ state title updatedAt }} }} }} ",
+                item.number
+            ));
+            fields.push(format!("o{index}={owner}"));
+            fields.push(format!("n{index}={name}"));
+        }
+        let query = format!("query({}) {{ {blocks}{TRAILER} }}", params.join(", "));
+        let parsed = run_query(run, &query, &fields).and_then(|json| envelope(&json));
+        let (mut data, _) = match parsed {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                first_error.get_or_insert(error);
+                continue;
+            }
+        };
+        succeeded = true;
+        let (_, rate) = trailer(&mut data);
+        rate_limit = combine_rate_limits(rate_limit, rate);
+        for (index, (item, _, _)) in chunk.iter().enumerate() {
+            let node = &data[format!("i{index}")]["issueOrPullRequest"];
+            let Some(state) = node["state"].as_str() else {
+                continue;
+            };
+            out.push(GitHubItemState {
+                repo: item.repo.clone(),
+                kind: item.kind.clone(),
+                number: item.number,
+                state: state.to_string(),
+                title: node["title"].as_str().unwrap_or_default().to_string(),
+                updated_at: node["updatedAt"].as_str().unwrap_or_default().to_string(),
+            });
+        }
+    }
+    if !succeeded {
+        return Err(first_error.unwrap_or_else(|| "GitHub returned nothing".into()));
+    }
+    Ok(GitHubItemStates {
+        items: out,
+        rate_limit,
+    })
+}
+
 const CACHE_FILE: &str = "github-inbox-cache.json";
 
 fn cache_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -744,6 +849,63 @@ mod tests {
     }
 
     const TRAILER_JSON: &str = r#""rateLimit":{"limit":5000,"remaining":4990,"resetAt":"2026-10-09T13:00:00Z","cost":3},"viewer":{"login":"maya"}"#;
+
+    fn item(repo: &str, kind: &str, number: i64) -> GitHubItemRef {
+        GitHubItemRef {
+            repo: repo.into(),
+            kind: kind.into(),
+            number,
+        }
+    }
+
+    #[test]
+    fn item_states_batch_lookups_and_skip_missing_items() {
+        let _guard = script(vec![Ok(format!(
+            r#"{{"data":{{
+                "i0":{{"issueOrPullRequest":{{"state":"MERGED","title":"Fix","updatedAt":"u0"}}}},
+                "i1":null,
+                {TRAILER_JSON}}},
+                "errors":[{{"path":["i1"],"message":"Could not resolve to a Repository"}}]}}"#
+        ))]);
+        let states = item_states(
+            &[
+                item("o/r", "pr", 7),
+                item("gone/x", "issue", 1),
+                item("bad", "pr", 2),
+            ],
+            scripted,
+        )
+        .unwrap();
+        assert_eq!(
+            states.items,
+            vec![GitHubItemState {
+                repo: "o/r".into(),
+                kind: "pr".into(),
+                number: 7,
+                state: "MERGED".into(),
+                title: "Fix".into(),
+                updated_at: "u0".into(),
+            }]
+        );
+        assert_eq!(states.rate_limit.unwrap().remaining, 4990);
+        let call = &calls()[0];
+        let query = call.iter().find(|arg| arg.starts_with("query=")).unwrap();
+        assert!(query.contains("issueOrPullRequest(number: 7)"));
+        assert!(call.contains(&"o1=gone".to_string()));
+        // The malformed slug never reaches GitHub.
+        assert!(!call.iter().any(|arg| arg == "o2=bad"));
+    }
+
+    #[test]
+    fn item_states_split_large_batches() {
+        let items: Vec<GitHubItemRef> = (1..=STATES_PER_QUERY as i64 + 1)
+            .map(|n| item("o/r", "issue", n))
+            .collect();
+        let empty = format!(r#"{{"data":{{{TRAILER_JSON}}}}}"#);
+        let _guard = script(vec![Ok(empty.clone()), Ok(empty)]);
+        assert!(item_states(&items, scripted).unwrap().items.is_empty());
+        assert_eq!(calls().len(), 2);
+    }
 
     #[test]
     fn lists_many_repositories_in_one_query_and_keeps_partial_results() {

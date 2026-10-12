@@ -225,6 +225,21 @@ mockIPC(
       case "tasks_column_set_done":
         doneColumn = (args.name as string | null) ?? null;
         return board();
+      case "git_github_item_states":
+        // The fixture's only pull request has been merged.
+        return {
+          items: (
+            args.items as { repo: string; kind: string; number: number }[]
+          )
+            .filter((item) => item.repo === "o/r" && item.number === 7)
+            .map((item) => ({
+              ...item,
+              state: "MERGED",
+              title: "Spec PR",
+              updatedAt: "2026-10-10T00:00:00Z",
+            })),
+          rateLimit: null,
+        };
       case "plugin:window|is_maximized":
         return false;
       default:

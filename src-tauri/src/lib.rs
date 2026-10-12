@@ -379,6 +379,7 @@ pub fn run() {
             github_inbox::git_github_inbox_items,
             fs::github_rate_limit_backoff,
             github_inbox::git_github_inbox_probe,
+            github_inbox::git_github_item_states,
             github_inbox::github_inbox_cache_load,
             github_inbox::github_inbox_cache_save,
             fs::git_github_work_item_details,

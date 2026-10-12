@@ -274,3 +274,24 @@ test("links an Inbox item to an existing task and to a new one", async ({
     inbox.getByRole("button", { name: "Crash triage" }),
   ).toBeVisible();
 });
+
+test("offers to finish a task whose pull requests merged", async ({ page }) => {
+  await choose(page);
+  const spec = card(page, "Write the spec");
+  await expect(spec).toContainText("merged");
+  await expect(spec).toContainText("Linked pull requests are finished.");
+  await spec.getByRole("button", { name: "Move", exact: true }).click();
+  await expect
+    .poll(async () => (await titles(page)).Done)
+    .toEqual(["Write the spec", "Shipped"]);
+});
+
+test("forgets the suggestion once dismissed", async ({ page }) => {
+  await choose(page);
+  const spec = card(page, "Write the spec");
+  await spec.getByRole("button", { name: "Dismiss" }).click();
+  await expect(spec).not.toContainText("Linked pull requests are finished.");
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(spec).toContainText("merged");
+  await expect(spec).not.toContainText("Linked pull requests are finished.");
+});
