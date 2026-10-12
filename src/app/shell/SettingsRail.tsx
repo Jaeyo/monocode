@@ -2,6 +2,7 @@ import {
   Archive,
   ArrowLeft,
   Bot,
+  CheckList,
   Inbox,
   FolderTree,
   Ghost,
@@ -31,6 +32,7 @@ const SECTION_ICONS: Record<SettingsSectionId, IconComponent> = {
   skills: Sparkles,
   monos: Ghost,
   inbox: Inbox,
+  tasks: CheckList,
   worktrees: FolderTree,
   archive: Archive,
 };

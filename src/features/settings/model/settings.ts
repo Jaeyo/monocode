@@ -28,6 +28,7 @@ export type SettingsSectionId =
   | "skills"
   | "monos"
   | "inbox"
+  | "tasks"
   | "worktrees"
   | "archive";
 
@@ -135,6 +136,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
       "github gitlab linear jira atlassian azure devops connect token integration",
   },
   {
+    id: "tasks",
+    group: "workspace",
+    label: "Tasks",
+    description:
+      "The folder your task files live in, one markdown file per task.",
+    keywords: "todo work item kanban board folder markdown due reminder",
+  },
+  {
     id: "archive",
     group: "workspace",
     label: "Archive",
@@ -227,6 +236,18 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "general",
     label: "Notifications",
     keywords: "notify alert toast permission reminder background",
+  },
+  {
+    id: "tasks",
+    section: "tasks",
+    label: "Tasks",
+    keywords: "todo work item kanban board markdown files",
+  },
+  {
+    id: "tasks-folder",
+    section: "tasks",
+    label: "Tasks folder",
+    keywords: "todo work item kanban board directory path",
   },
   {
     id: "notes",

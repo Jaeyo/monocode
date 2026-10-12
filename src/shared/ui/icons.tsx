@@ -76,6 +76,7 @@ import MessageMultiple01Icon from "@hugeicons/core-free-icons/MessageMultiple01I
 import MinusSignIcon from "@hugeicons/core-free-icons/MinusSignIcon";
 import MoreHorizontalIcon from "@hugeicons/core-free-icons/MoreHorizontalIcon";
 import Note01Icon from "@hugeicons/core-free-icons/Note01Icon";
+import CheckListIcon from "@hugeicons/core-free-icons/CheckListIcon";
 import PaintBoardIcon from "@hugeicons/core-free-icons/PaintBoardIcon";
 import PauseIcon from "@hugeicons/core-free-icons/PauseIcon";
 import PencilEdit01Icon from "@hugeicons/core-free-icons/PencilEdit01Icon";
@@ -225,6 +226,7 @@ export const Globe = wrap(GlobeIcon, "Globe");
 export const Internet = wrap(InternetIcon, "Internet");
 export const ImagePlus = wrap(ImageAdd01Icon, "ImagePlus");
 export const Inbox = wrap(InboxIcon, "Inbox");
+export const CheckList = wrap(CheckListIcon, "CheckList");
 export const BellOff = wrap(NotificationOff01Icon, "BellOff");
 export const Keyboard = wrap(KeyboardIcon, "Keyboard");
 export const ListBullet = wrap(LeftToRightListBulletIcon, "ListBullet");

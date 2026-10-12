@@ -23,6 +23,7 @@ import {
   GitBranch,
   GitPullRequest,
   Inbox,
+  CheckList,
   ListFilter,
   PanelLeft,
   Pin,
@@ -328,11 +329,13 @@ type Props = {
   onSearch?: () => void;
   onOpenInbox?: () => void;
   onOpenInboxItem?: (item: LinkedWorkItem, sessionId: string) => void;
+  onOpenTasks?: () => void;
   onOpenNotes?: () => void;
   onOpenAutomations?: () => void;
   onGoToFile?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
+  tasksActive?: boolean;
   notesActive?: boolean;
   automationsActive?: boolean;
   notesEnabled?: boolean;
@@ -428,11 +431,13 @@ function SidebarComponent({
   onSearch,
   onOpenInbox,
   onOpenInboxItem,
+  onOpenTasks,
   onOpenNotes,
   onOpenAutomations,
   onGoToFile,
   searchActive = false,
   inboxActive = false,
+  tasksActive = false,
   notesActive = false,
   automationsActive = false,
   notesEnabled = true,
@@ -803,6 +808,7 @@ function SidebarComponent({
   const otherViewActive =
     searchActive ||
     inboxActive ||
+    tasksActive ||
     notesActive ||
     automationsActive ||
     settingsOpen;
@@ -1759,10 +1765,12 @@ function SidebarComponent({
               onSearch={onSearch}
               onOpenInbox={onOpenInbox}
               onOpenNotificationSettings={onOpenNotificationSettings}
+              onOpenTasks={onOpenTasks}
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
               onOpenAutomations={onOpenAutomations}
               searchActive={searchActive}
               inboxActive={inboxActive}
+              tasksActive={tasksActive}
               notesActive={notesActive}
               automationsActive={automationsActive}
               inboxUnseen={inboxUnseen}
@@ -2282,7 +2290,9 @@ function SidebarComponent({
           onOpenInbox={onOpenInbox}
           inboxActive={inboxActive}
           onOpenNotificationSettings={onOpenNotificationSettings}
+          onOpenTasks={onOpenTasks}
           onOpenNotes={notesEnabled ? onOpenNotes : undefined}
+          tasksActive={tasksActive}
           notesActive={notesActive}
           onOpenAutomations={onOpenAutomations}
           automationsActive={automationsActive}
@@ -2313,7 +2323,9 @@ function SidebarComponent({
           onOpenInbox={onOpenInbox}
           inboxActive={inboxActive}
           notesEnabled={notesEnabled}
+          onOpenTasks={onOpenTasks}
           onOpenNotes={onOpenNotes}
+          tasksActive={tasksActive}
           notesActive={notesActive}
           onOpenAutomations={onOpenAutomations}
           automationsActive={automationsActive}
@@ -2392,10 +2404,12 @@ function SidebarProjectPicker({
   onSearch,
   onOpenInbox,
   onOpenNotificationSettings,
+  onOpenTasks,
   onOpenNotes,
   onOpenAutomations,
   searchActive = false,
   inboxActive = false,
+  tasksActive = false,
   notesActive = false,
   automationsActive = false,
   inboxUnseen = false,
@@ -2410,10 +2424,12 @@ function SidebarProjectPicker({
   onSearch?: () => void;
   onOpenInbox?: () => void;
   onOpenNotificationSettings?: (projectPath?: string) => void;
+  onOpenTasks?: () => void;
   onOpenNotes?: () => void;
   onOpenAutomations?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
+  tasksActive?: boolean;
   notesActive?: boolean;
   automationsActive?: boolean;
   inboxUnseen?: boolean;
@@ -2476,6 +2492,11 @@ function SidebarProjectPicker({
             </span>
           </IconButton>
         ) : null}
+        {onOpenTasks ? (
+          <IconButton label="Tasks" active={tasksActive} onClick={onOpenTasks}>
+            <CheckList className="size-3.5" strokeWidth={1.75} />
+          </IconButton>
+        ) : null}
         {onOpenNotes ? (
           <IconButton label="Notes" active={notesActive} onClick={onOpenNotes}>
             <StickyNote className="size-3.5" strokeWidth={1.75} />
@@ -2525,7 +2546,9 @@ function CompactProjectRail({
   onOpenInbox,
   inboxActive,
   onOpenNotificationSettings,
+  onOpenTasks,
   onOpenNotes,
+  tasksActive,
   notesActive,
   onOpenAutomations,
   automationsActive,
@@ -2554,7 +2577,9 @@ function CompactProjectRail({
   onOpenInbox?: () => void;
   inboxActive: boolean;
   onOpenNotificationSettings?: (projectPath?: string) => void;
+  onOpenTasks?: () => void;
   onOpenNotes?: () => void;
+  tasksActive: boolean;
   notesActive: boolean;
   onOpenAutomations?: () => void;
   automationsActive: boolean;
@@ -2597,6 +2622,7 @@ function CompactProjectRail({
   const workspaceActive =
     !searchActive &&
     !inboxActive &&
+    !tasksActive &&
     !notesActive &&
     !automationsActive &&
     !monoViewActive;
@@ -2717,6 +2743,14 @@ function CompactProjectRail({
             setInboxMenu({ x, y });
           }}
         />
+        {onOpenTasks ? (
+          <CompactRailAction
+            label="Tasks"
+            icon={CheckList}
+            active={tasksActive}
+            onClick={action(tasksActive, onOpenTasks)}
+          />
+        ) : null}
         {onOpenNotes ? (
           <CompactRailAction
             label="Notes"
