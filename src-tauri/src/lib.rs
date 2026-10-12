@@ -51,6 +51,7 @@ mod search;
 mod session_store;
 mod skills;
 pub mod ssh_askpass;
+mod tasks;
 #[cfg(target_os = "macos")]
 mod trackpad_zoom;
 #[cfg(target_os = "windows")]
@@ -532,6 +533,20 @@ pub fn run() {
             session_store::session_take_in_flight,
             session_store::workspace_set_snapshot,
             session_store::workspace_get_snapshot,
+            tasks::tasks_load,
+            tasks::tasks_init,
+            tasks::tasks_create,
+            tasks::tasks_update,
+            tasks::tasks_move,
+            tasks::tasks_reorder,
+            tasks::tasks_delete,
+            tasks::tasks_restore,
+            tasks::tasks_trash_flush,
+            tasks::tasks_column_add,
+            tasks::tasks_column_rename,
+            tasks::tasks_column_delete,
+            tasks::tasks_column_reorder,
+            tasks::tasks_column_set_done,
             notes::notes_list,
             notes::notes_get,
             notes::notes_upsert,
