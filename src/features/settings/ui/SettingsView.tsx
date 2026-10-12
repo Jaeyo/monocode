@@ -197,6 +197,10 @@ import {
 import { revealPath } from "../../../platform/tauri/fs";
 import { useTasks } from "../../tasks/model/tasksStore";
 import { promptForTasksRoot } from "../../tasks/model/tasksRoot";
+import {
+  saveDueRemindersEnabled,
+  useDueRemindersEnabled,
+} from "../../tasks/model/taskReminders";
 import { IS_LINUX, IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import {
   loadArchivedProjects,
@@ -1197,6 +1201,7 @@ function ChatPage() {
 
 function TasksPage() {
   const tasks = useTasks();
+  const dueReminders = useDueRemindersEnabled();
   const [busy, setBusy] = useState(false);
   const choose = async () => {
     setBusy(true);
@@ -1236,6 +1241,17 @@ function TasksPage() {
             {tasks.root ? "Change…" : "Choose…"}
           </SecondaryButton>
         </div>
+      </Row>
+      <Row
+        id="tasks-due-reminders"
+        label="Due reminders"
+        description="Once a day from 9:00, a notification for tasks due today or overdue."
+      >
+        <Toggle
+          label="Due reminders"
+          on={dueReminders}
+          onChange={saveDueRemindersEnabled}
+        />
       </Row>
     </Group>
   );

@@ -88,13 +88,24 @@ import { useStableValue } from "../shared/hooks/useStableValue";
 import { Sidebar } from "./shell/Sidebar";
 import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
 import { ToastHost } from "../shared/ui/Toasts";
-import { startTasks } from "../features/tasks/model/tasksStore";
+import {
+  peekTasks,
+  startTasks,
+  subscribeTasks,
+} from "../features/tasks/model/tasksStore";
+import {
+  maybeRemindDue,
+  TASKS_DUE_NOTIFICATION_ID,
+  useOverdueTaskCount,
+} from "../features/tasks/model/taskReminders";
 import type { Task } from "../features/tasks/model/tasks";
 import {
   OPEN_TASK_EVENT,
+  requestOverdueFilter,
   requestTaskSelection,
 } from "../features/tasks/model/taskViewState";
 import { linkTaskSession } from "../features/tasks/model/taskSession";
+import { QuickTaskDialog } from "../features/tasks/ui/QuickTaskDialog";
 import { HarnessUpdateNotice } from "../features/providers/ui/HarnessUpdateNotice";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
 import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDialog";
@@ -1258,6 +1269,7 @@ function Workspace({
   const openingInboxSessions = useRef(new Map<string, Promise<string>>());
   const [notesViewOpen, setNotesViewOpen] = useState(false);
   const [tasksViewOpen, setTasksViewOpen] = useState(false);
+  const [quickTaskOpen, setQuickTaskOpen] = useState(false);
   const [automationsViewOpen, setAutomationsViewOpen] = useState(false);
   const [inspectedWorkerId, setInspectedWorkerId] = useState<string | null>(
     null,
@@ -1578,6 +1590,25 @@ function Workspace({
   useEffect(() => {
     startTasks();
   }, []);
+
+  // One bundled due-date reminder a day: checked as tasks load, then every
+  // half hour so a morning start or a day rollover is caught.
+  useEffect(() => {
+    let lastBoard = peekTasks().board;
+    const check = () => void maybeRemindDue(peekTasks().board);
+    const unsubscribe = subscribeTasks(() => {
+      const board = peekTasks().board;
+      if (board && !lastBoard) check();
+      lastBoard = board;
+    });
+    const timer = window.setInterval(check, 30 * 60_000);
+    check();
+    return () => {
+      unsubscribe();
+      window.clearInterval(timer);
+    };
+  }, []);
+  const tasksOverdue = useOverdueTaskCount();
 
   useEffect(
     () =>
@@ -12444,6 +12475,7 @@ function Workspace({
           run("open_settings", () => a.openSettings());
         else if (shortcut === "App: Find in Files")
           run("find_in_project", a.onFindInProject);
+        else if (shortcut === "App: New Task") setQuickTaskOpen(true);
         return;
       }
     };
@@ -12534,6 +12566,16 @@ function Workspace({
       }),
       // Every window hears the click; only the one holding the session acts.
       listen<string>(NOTIFICATION_CLICK_EVENT, ({ payload: sessionId }) => {
+        if (sessionId === TASKS_DUE_NOTIFICATION_ID) {
+          const win = getCurrentWindow();
+          void win
+            .unminimize()
+            .then(() => win.setFocus())
+            .catch(() => {});
+          requestOverdueFilter();
+          actions.current.onOpenTasks();
+          return;
+        }
         if (!sessionsRef.current.some((s) => s.id === sessionId)) return;
         const win = getCurrentWindow();
         // Windows leaves a minimized window minimized when it is only focused.
@@ -13188,6 +13230,7 @@ function Workspace({
               searchActive={searchViewOpen}
               inboxActive={inboxViewOpen}
               tasksActive={tasksViewOpen}
+              tasksOverdue={tasksOverdue}
               notesActive={notesViewOpen}
               automationsActive={automationsViewOpen}
               notesEnabled={notesEnabled}
@@ -13705,6 +13748,12 @@ function Workspace({
             onHeightChange={setHarnessUpdateHeight}
           />
           <ToastHost />
+          {quickTaskOpen ? (
+            <QuickTaskDialog
+              onClose={() => setQuickTaskOpen(false)}
+              onOpenTask={onOpenTaskFromElsewhere}
+            />
+          ) : null}
           <ApprovalToasts
             notices={hiddenApprovalToasts}
             topOffset={

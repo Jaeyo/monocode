@@ -250,6 +250,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "todo work item kanban board directory path",
   },
   {
+    id: "tasks-due-reminders",
+    section: "tasks",
+    label: "Due reminders",
+    keywords: "deadline due date notification overdue",
+  },
+  {
     id: "notes",
     section: "general",
     label: "Notes",
@@ -1121,6 +1127,7 @@ export const KEYBINDINGS: KeybindingRow[] = [
   { command: "App: Find in Files", keys: `${MOD}${SHIFT}F`, when: "Always" },
   { command: "App: Open Project", keys: `${MOD}O`, when: "Always" },
   { command: "App: New Window", keys: `${MOD}${SHIFT}N`, when: "Always" },
+  { command: "App: New Task", keys: `${MOD}${SHIFT}T`, when: "Always" },
   ...(IS_MAC
     ? [
         {

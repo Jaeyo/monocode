@@ -110,6 +110,7 @@ type Props = {
   onOpenTasks?: () => void;
   onOpenNotes?: () => void;
   tasksActive?: boolean;
+  tasksOverdue?: number;
   notesActive?: boolean;
   onOpenAutomations?: () => void;
   automationsActive?: boolean;
@@ -151,6 +152,7 @@ export function ProjectRail({
   onOpenTasks,
   onOpenNotes,
   tasksActive = false,
+  tasksOverdue = 0,
   notesActive = false,
   onOpenAutomations,
   automationsActive = false,
@@ -407,7 +409,10 @@ export function ProjectRail({
               icon={CheckList}
               onClick={onOpenTasks}
               active={tasksActive}
-              ariaLabel="Tasks"
+              badge={tasksOverdue > 0 ? tasksOverdue : undefined}
+              ariaLabel={
+                tasksOverdue > 0 ? `Tasks, ${tasksOverdue} overdue` : "Tasks"
+              }
             />
             {notesEnabled ? (
               <RailAction

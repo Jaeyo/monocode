@@ -22,6 +22,7 @@ const APP_SHORTCUTS: [string, string, boolean][] = [
   ["App: Search", "k", false],
   ["App: Settings", ",", false],
   ["App: Find in Files", "f", true],
+  ["App: New Task", "t", true],
 ];
 
 const APP_COMMANDS = new Set(APP_SHORTCUTS.map(([command]) => command));

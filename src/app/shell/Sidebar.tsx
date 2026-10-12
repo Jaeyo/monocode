@@ -336,6 +336,8 @@ type Props = {
   searchActive?: boolean;
   inboxActive?: boolean;
   tasksActive?: boolean;
+  /** Overdue tasks, shown as a badge on the Tasks item. */
+  tasksOverdue?: number;
   notesActive?: boolean;
   automationsActive?: boolean;
   notesEnabled?: boolean;
@@ -438,6 +440,7 @@ function SidebarComponent({
   searchActive = false,
   inboxActive = false,
   tasksActive = false,
+  tasksOverdue = 0,
   notesActive = false,
   automationsActive = false,
   notesEnabled = true,
@@ -2293,6 +2296,7 @@ function SidebarComponent({
           onOpenTasks={onOpenTasks}
           onOpenNotes={notesEnabled ? onOpenNotes : undefined}
           tasksActive={tasksActive}
+          tasksOverdue={tasksOverdue}
           notesActive={notesActive}
           onOpenAutomations={onOpenAutomations}
           automationsActive={automationsActive}
@@ -2326,6 +2330,7 @@ function SidebarComponent({
           onOpenTasks={onOpenTasks}
           onOpenNotes={onOpenNotes}
           tasksActive={tasksActive}
+          tasksOverdue={tasksOverdue}
           notesActive={notesActive}
           onOpenAutomations={onOpenAutomations}
           automationsActive={automationsActive}
@@ -2549,6 +2554,7 @@ function CompactProjectRail({
   onOpenTasks,
   onOpenNotes,
   tasksActive,
+  tasksOverdue,
   notesActive,
   onOpenAutomations,
   automationsActive,
@@ -2580,6 +2586,7 @@ function CompactProjectRail({
   onOpenTasks?: () => void;
   onOpenNotes?: () => void;
   tasksActive: boolean;
+  tasksOverdue: number;
   notesActive: boolean;
   onOpenAutomations?: () => void;
   automationsActive: boolean;
@@ -2748,6 +2755,7 @@ function CompactProjectRail({
             label="Tasks"
             icon={CheckList}
             active={tasksActive}
+            dot={tasksOverdue > 0}
             onClick={action(tasksActive, onOpenTasks)}
           />
         ) : null}

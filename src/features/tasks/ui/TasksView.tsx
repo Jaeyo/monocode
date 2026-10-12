@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckList, Plus, RefreshCw } from "../../../shared/ui/icons";
 import { OverlayNav } from "../../../app/shell/TitleBar";
 import { WindowControls } from "../../../app/shell/WindowControls";
@@ -8,7 +8,19 @@ import { peekTasks, refreshTasks, useTasks } from "../model/tasksStore";
 import { refreshLinkStatuses } from "../model/taskLinkStatus";
 import { promptForTasksRoot } from "../model/tasksRoot";
 import { takeTaskUndo } from "../model/taskActions";
-import { TASK_SELECT_EVENT, takeTaskSelection } from "../model/taskViewState";
+import {
+  TASK_FILTER_EVENT,
+  TASK_SELECT_EVENT,
+  takeOverdueFilter,
+  takeTaskSelection,
+} from "../model/taskViewState";
+import {
+  EMPTY_TASK_FILTER,
+  isTaskFilterActive,
+  taskMatches,
+  type TaskFilter,
+} from "../model/taskFilter";
+import { TaskFilterBar } from "./TaskFilterBar";
 import { TaskBoardList } from "./TaskBoardList";
 import { TaskDetail } from "./TaskDetail";
 import { TaskSessionsField } from "./TaskSessionsField";
@@ -33,6 +45,7 @@ const NO_SESSIONS: readonly SessionSummary[] = [];
 // Kept across visits, like the Notes selection.
 type Selection = Pick<Task, "id" | "path">;
 let rememberedSelection: Selection | null = null;
+let rememberedFilter: TaskFilter = EMPTY_TASK_FILTER;
 
 function isEditable(target: EventTarget | null): boolean {
   return (
@@ -70,6 +83,26 @@ export function TasksView({
     () => takeTaskSelection() ?? rememberedSelection,
   );
   const [creatingIn, setCreatingIn] = useState<string | null>(null);
+  const [filter, setFilter] = useState<TaskFilter>(() =>
+    takeOverdueFilter()
+      ? { ...rememberedFilter, overdue: true }
+      : rememberedFilter,
+  );
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    rememberedFilter = filter;
+  }, [filter]);
+
+  // A due reminder asked for the overdue tasks.
+  useEffect(() => {
+    const onFilter = () => {
+      if (takeOverdueFilter()) {
+        setFilter((current) => ({ ...current, overdue: true }));
+      }
+    };
+    window.addEventListener(TASK_FILTER_EVENT, onFilter);
+    return () => window.removeEventListener(TASK_FILTER_EVENT, onFilter);
+  }, []);
 
   // Another view (Inbox, a session chip) asked to show a task.
   useEffect(() => {
@@ -106,6 +139,17 @@ export function TasksView({
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing) return;
       const mod = IS_MAC ? event.metaKey : event.ctrlKey;
+      if (
+        mod &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === "f"
+      ) {
+        event.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+        return;
+      }
       if (
         mod &&
         !event.shiftKey &&
@@ -147,6 +191,20 @@ export function TasksView({
   }, [boardReady]);
 
   const firstColumn = board?.columns[0]?.name ?? null;
+  const filtering = isTaskFilterActive(filter);
+  const doneColumn = board?.doneColumn ?? null;
+  const visible = useMemo(
+    () =>
+      filtering ? (task: Task) => taskMatches(task, filter, doneColumn) : null,
+    [filtering, filter, doneColumn],
+  );
+  const tags = useMemo(
+    () =>
+      [...new Set(allTasks(board).flatMap((task) => task.tags))].sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    [board],
+  );
 
   return (
     <div
@@ -222,11 +280,17 @@ export function TasksView({
       ) : (
         <div className="flex min-h-0 min-w-0 flex-1">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <TaskFilterBar
+              ref={searchRef}
+              filter={filter}
+              tags={tags}
+              onChange={setFilter}
+            />
             <TaskBoardList
               board={board}
               selectedId={selected?.id ?? null}
-              visible={null}
-              forceOpen={false}
+              visible={visible}
+              forceOpen={filtering}
               creatingIn={creatingIn}
               onCreatingIn={setCreatingIn}
               onSelect={(task) => setSelection(task)}

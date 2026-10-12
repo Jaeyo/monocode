@@ -50,6 +50,21 @@ export function requestTaskSelection(task: Pick<Task, "id" | "path">): void {
   window.dispatchEvent(new CustomEvent(TASK_SELECT_EVENT));
 }
 
+export const TASK_FILTER_EVENT = "monocode:task-filter";
+let pendingOverdue = false;
+
+/** Asks the Tasks view to show only overdue tasks (a due reminder's click). */
+export function requestOverdueFilter(): void {
+  pendingOverdue = true;
+  window.dispatchEvent(new CustomEvent(TASK_FILTER_EVENT));
+}
+
+export function takeOverdueFilter(): boolean {
+  const pending = pendingOverdue;
+  pendingOverdue = false;
+  return pending;
+}
+
 /** The shell opens the Tasks view on this, from a session's task chip. */
 export const OPEN_TASK_EVENT = "monocode:open-task";
 

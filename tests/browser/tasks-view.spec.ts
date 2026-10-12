@@ -329,3 +329,47 @@ test("starts a session with the task as context and lists it", async ({
     ),
   ).toEqual(["S-new"]);
 });
+
+test("searches and filters, opening folded columns that match", async ({
+  page,
+}) => {
+  await choose(page);
+  const search = page.getByRole("textbox", { name: "Search tasks" });
+  await page.locator("body").click({ position: { x: 600, y: 700 } });
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(search).toBeFocused();
+  await search.fill("spec");
+  await expect(card(page, "Write the spec")).toBeVisible();
+  await expect(card(page, "Fix login")).toHaveCount(0);
+
+  // Done is folded, but a match inside it shows.
+  await search.fill("shipped");
+  await expect(card(page, "Shipped")).toBeVisible();
+
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await page.getByRole("button", { name: "Overdue" }).click();
+  await expect(card(page, "Fix login")).toBeVisible();
+  await expect(card(page, "Write the spec")).toHaveCount(0);
+  await page
+    .getByRole("combobox", { name: "Filter by links" })
+    .selectOption("with");
+  await expect(card(page, "Fix login")).toHaveCount(0);
+});
+
+test("creates a task from the quick dialog without leaving", async ({
+  page,
+}) => {
+  await choose(page);
+  await page.getByRole("button", { name: "Quick task" }).click();
+  const dialog = page.getByRole("dialog", { name: "New Task" });
+  await dialog.getByRole("textbox", { name: "Task title" }).fill("Call vendor");
+  await dialog
+    .getByRole("combobox", { name: "Column" })
+    .selectOption("In Progress");
+  await dialog.getByRole("button", { name: "Create" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page.getByText("Created “Call vendor” in In Progress."),
+  ).toBeVisible();
+  expect((await titles(page))["In Progress"]).toEqual(["Call vendor"]);
+});

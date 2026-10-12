@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { createRoot } from "react-dom/client";
+import { QuickTaskDialog } from "../../src/features/tasks/ui/QuickTaskDialog";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { TasksView } from "../../src/features/tasks/ui/TasksView";
 import { ToastHost } from "../../src/shared/ui/Toasts";
@@ -296,6 +298,28 @@ const inboxItem: InboxItem = {
   projectPath: "/p",
   provider: "github",
 };
+// ⌘⇧T is the shell's; the fixture opens the same dialog from a button.
+function QuickTaskLauncher() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex h-7 items-center rounded-md border border-content/15 px-2 text-[12px] text-content/80"
+      >
+        Quick task
+      </button>
+      {open ? (
+        <QuickTaskDialog
+          onClose={() => setOpen(false)}
+          onOpenTask={(task) => opened.push(task.title)}
+        />
+      ) : null}
+    </>
+  );
+}
+
 const opened: string[] = [];
 // Stands in for the shell: a task chip opens a session, which the task lists.
 const started: NoteComposerCard[] = [];
@@ -335,6 +359,7 @@ createRoot(document.getElementById("root")!).render(
         onOpenTask={(task) => opened.push(task.title)}
         className="flex h-7 items-center gap-1.5 rounded-md border border-content/15 px-2 text-[12px] text-content/80"
       />
+      <QuickTaskLauncher />
     </div>
     <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       <TasksView

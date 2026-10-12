@@ -907,6 +907,7 @@ describe("settings search", () => {
       "Notifications",
       "Project notifications",
       "Claude Code hooks",
+      "Due reminders",
       "General",
       "Inbox",
     ]);
