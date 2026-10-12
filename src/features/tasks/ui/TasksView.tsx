@@ -11,13 +11,24 @@ import { takeTaskUndo } from "../model/taskActions";
 import { TASK_SELECT_EVENT, takeTaskSelection } from "../model/taskViewState";
 import { TaskBoardList } from "./TaskBoardList";
 import { TaskDetail } from "./TaskDetail";
+import { TaskSessionsField } from "./TaskSessionsField";
+import type { RecentProject } from "../../projects/model/recents";
+import type { SessionSummary } from "../../sessions/data/sessionStore";
 
 type Props = {
   besideRail?: boolean;
   compactRail?: boolean;
+  recents?: RecentProject[];
+  /** The project a task's session starts in when it names none. */
+  defaultCwd?: string;
+  sessions?: readonly SessionSummary[];
+  onOpenSession?: (sessionId: string) => void;
   onClose: () => void;
   onToggleSidebar?: () => void;
 };
+
+const NO_RECENTS: RecentProject[] = [];
+const NO_SESSIONS: readonly SessionSummary[] = [];
 
 // Kept across visits, like the Notes selection.
 type Selection = Pick<Task, "id" | "path">;
@@ -44,6 +55,10 @@ function overlayOpen(): boolean {
 export function TasksView({
   besideRail = false,
   compactRail = false,
+  recents = NO_RECENTS,
+  defaultCwd,
+  sessions = NO_SESSIONS,
+  onOpenSession,
   onClose,
   onToggleSidebar,
 }: Props) {
@@ -223,7 +238,17 @@ export function TasksView({
               board={board}
               task={selected}
               onClose={() => setSelection(null)}
-            />
+            >
+              {onOpenSession ? (
+                <TaskSessionsField
+                  task={selected}
+                  recents={recents}
+                  defaultCwd={defaultCwd}
+                  sessions={sessions}
+                  onOpenSession={onOpenSession}
+                />
+              ) : null}
+            </TaskDetail>
           ) : null}
         </div>
       )}

@@ -12,6 +12,7 @@ import {
   type TaskLink,
 } from "../model/tasks";
 import { updateTask } from "../model/tasksStore";
+import { linkLabel } from "../model/taskLinkText";
 import { moveTaskWithUndo } from "../model/taskActions";
 import {
   dismissDoneSuggestion,
@@ -29,15 +30,6 @@ const PROVIDERS = new Set<string>([
   "jira",
   "azuredevops",
 ]);
-
-export function linkLabel(link: TaskLink): string {
-  const ref =
-    link.identifier ??
-    (link.number != null
-      ? `${link.repo ? `${link.repo}` : ""}#${link.number}`
-      : link.repo);
-  return link.title ? `${ref ? `${ref} ` : ""}${link.title}` : ref || link.url;
-}
 
 const LINK_STATE_STYLE: Record<LinkState, string> = {
   open: "text-emerald-400",

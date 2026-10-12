@@ -295,3 +295,37 @@ test("forgets the suggestion once dismissed", async ({ page }) => {
   await expect(spec).toContainText("merged");
   await expect(spec).not.toContainText("Linked pull requests are finished.");
 });
+
+test("starts a session with the task as context and lists it", async ({
+  page,
+}) => {
+  await choose(page);
+  await card(page, "Write the spec").click();
+  const panel = page.getByRole("complementary", {
+    name: "Task: Write the spec",
+  });
+  await panel.getByRole("button", { name: "Start session" }).click();
+  const started = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          started: { kind?: string; sourceCwd?: string; body: string }[];
+        }
+      ).started,
+  );
+  expect(started).toHaveLength(1);
+  expect(started[0].kind).toBe("task");
+  expect(started[0].sourceCwd).toBe("/code/r");
+  expect(started[0].body).toContain(
+    "File: /tmp/fixture-tasks/TODO/Write the spec.md",
+  );
+  await expect(
+    panel.getByRole("button", { name: /Spec session/ }),
+  ).toBeVisible();
+  await panel.getByRole("button", { name: /Spec session/ }).click();
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { openedSessions: string[] }).openedSessions,
+    ),
+  ).toEqual(["S-new"]);
+});

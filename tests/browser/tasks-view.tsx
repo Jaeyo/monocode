@@ -11,6 +11,12 @@ import type {
 } from "../../src/features/tasks/model/tasks";
 import type { InboxItem } from "../../src/features/inbox/model/githubTasks";
 import { InboxTaskControls } from "../../src/features/tasks/ui/TaskInboxActions";
+import {
+  ADD_NOTE_TO_CHAT_EVENT,
+  type NoteComposerCard,
+} from "../../src/features/notes/notes";
+import { linkTaskSession } from "../../src/features/tasks/model/taskSession";
+import type { SessionSummary } from "../../src/features/sessions/data/sessionStore";
 import "../../src/styles/index.css";
 
 // An in-memory stand-in for the Rust tasks commands: enough of their
@@ -114,6 +120,15 @@ function edit(current: Task, change: TaskEdit): Task {
     }
     case "saveDocument":
       return { ...next, document: change.document.trim() };
+    case "addSession":
+      return { ...next, sessions: [...next.sessions, change.sessionId] };
+    case "removeSession":
+      return {
+        ...next,
+        sessions: next.sessions.filter((id) => id !== change.sessionId),
+      };
+    case "setProject":
+      return { ...next, project: change.project };
     default:
       return next;
   }
@@ -282,7 +297,27 @@ const inboxItem: InboxItem = {
   provider: "github",
 };
 const opened: string[] = [];
-Object.assign(window, { opened });
+// Stands in for the shell: a task chip opens a session, which the task lists.
+const started: NoteComposerCard[] = [];
+const openedSessions: string[] = [];
+window.addEventListener(ADD_NOTE_TO_CHAT_EVENT, (event) => {
+  const card = (event as CustomEvent<NoteComposerCard>).detail;
+  started.push(card);
+  void linkTaskSession(card, "S-new");
+});
+const sessionSummaries: SessionSummary[] = [
+  {
+    id: "S-new",
+    cwd: "/code/r",
+    harness: "claude",
+    model: "",
+    runtimeMode: "supervised",
+    title: "Spec session",
+    createdAt: 0,
+    updatedAt: Date.now(),
+  },
+];
+Object.assign(window, { opened, started, openedSessions });
 
 createRoot(document.getElementById("root")!).render(
   <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
@@ -302,7 +337,13 @@ createRoot(document.getElementById("root")!).render(
       />
     </div>
     <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-      <TasksView besideRail onClose={() => undefined} />
+      <TasksView
+        besideRail
+        defaultCwd="/code/r"
+        sessions={sessionSummaries}
+        onOpenSession={(id) => openedSessions.push(id)}
+        onClose={() => undefined}
+      />
     </div>
     <ToastHost />
   </div>,

@@ -90,7 +90,11 @@ import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
 import { ToastHost } from "../shared/ui/Toasts";
 import { startTasks } from "../features/tasks/model/tasksStore";
 import type { Task } from "../features/tasks/model/tasks";
-import { requestTaskSelection } from "../features/tasks/model/taskViewState";
+import {
+  OPEN_TASK_EVENT,
+  requestTaskSelection,
+} from "../features/tasks/model/taskViewState";
+import { linkTaskSession } from "../features/tasks/model/taskSession";
 import { HarnessUpdateNotice } from "../features/providers/ui/HarnessUpdateNotice";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
 import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDialog";
@@ -2895,6 +2899,10 @@ function Workspace({
       appendTab(tab, cwd);
       setActiveTabId(tab.id);
       setComposerFocused(true);
+      // The task file lists its sessions, so the link survives either side.
+      if (card.kind === "task") {
+        void linkTaskSession({ ...card, sourceCwd: cwd }, session.id);
+      }
     },
     [
       active?.cwd,
@@ -11738,6 +11746,18 @@ function Workspace({
     [history, onSelectHistorySession],
   );
 
+  const onOpenTaskSession = useCallback(
+    (sessionId: string) => {
+      setTasksViewOpen(false);
+      const cwd =
+        sessionsRef.current.find((session) => session.id === sessionId)?.cwd ??
+        history.find((session) => session.id === sessionId)?.cwd;
+      setSidebarTab("sessions", cwd);
+      void onSelectHistorySession(sessionId);
+    },
+    [history, onSelectHistorySession],
+  );
+
   const onRepairChecks = useCallback(
     async (item: InboxItem, request: CiRepairRequest, sessionId?: string) => {
       const cwd = item.projectPath;
@@ -11836,6 +11856,16 @@ function Workspace({
     },
     [onOpenTasks],
   );
+
+  // A session's task chip asks for its task.
+  useEffect(() => {
+    const onOpen = (event: Event) => {
+      const task = (event as CustomEvent<Pick<Task, "id" | "path">>).detail;
+      if (task?.id) onOpenTaskFromElsewhere(task);
+    };
+    window.addEventListener(OPEN_TASK_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_TASK_EVENT, onOpen);
+  }, [onOpenTaskFromElsewhere]);
 
   const onOpenAutomations = useCallback(() => {
     workspaceNavigation.cancel();
@@ -13522,6 +13552,10 @@ function Workspace({
                 <TasksView
                   besideRail={projectRailOpen || compactProjectRail}
                   compactRail={compactRailActive}
+                  recents={recents}
+                  defaultCwd={sidebarCwd}
+                  sessions={history}
+                  onOpenSession={onOpenTaskSession}
                   onClose={onLeaveTasks}
                   onToggleSidebar={onToggleSidebar}
                 />

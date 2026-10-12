@@ -1527,11 +1527,15 @@ function sanitizeNoteCard(value: Block["noteCard"]): Block["noteCard"] {
   const title = typeof value.title === "string" ? value.title.trim() : "";
   const sourceCwd =
     typeof value.sourceCwd === "string" ? value.sourceCwd.trim() : "";
+  const taskPath =
+    typeof value.taskPath === "string" ? value.taskPath.trim() : "";
   return {
     id,
     slug,
     title,
     ...(sourceCwd ? { sourceCwd } : {}),
+    ...(value.kind === "task" ? { kind: "task" as const } : {}),
+    ...(taskPath ? { taskPath } : {}),
   };
 }
 

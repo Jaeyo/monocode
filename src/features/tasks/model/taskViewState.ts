@@ -50,6 +50,17 @@ export function requestTaskSelection(task: Pick<Task, "id" | "path">): void {
   window.dispatchEvent(new CustomEvent(TASK_SELECT_EVENT));
 }
 
+/** The shell opens the Tasks view on this, from a session's task chip. */
+export const OPEN_TASK_EVENT = "monocode:open-task";
+
+export function openTaskFromChip(task: Pick<Task, "id" | "path">): void {
+  window.dispatchEvent(
+    new CustomEvent<Pick<Task, "id" | "path">>(OPEN_TASK_EVENT, {
+      detail: { id: task.id, path: task.path },
+    }),
+  );
+}
+
 export function takeTaskSelection(): Pick<Task, "id" | "path"> | null {
   const selection = pendingSelection;
   pendingSelection = null;
