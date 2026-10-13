@@ -37,8 +37,29 @@ test("sets up a folder and lists the columns", async ({ page }) => {
   await expect(card(page, "Fix login")).toContainText("Jan 1, 2000");
 });
 
+test("todo lists start folded and open on demand", async ({ page }) => {
+  await choose(page);
+  const spec = card(page, "Write the spec");
+  const toggle = spec.getByRole("button", {
+    name: "Show todos for Write the spec",
+  });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(spec.getByRole("checkbox")).toHaveCount(0);
+  await toggle.click();
+  await expect(spec.getByRole("checkbox")).toHaveCount(2);
+  // Opening the list is not a click on the card.
+  await expect(page.getByRole("complementary")).toHaveCount(0);
+  await spec
+    .getByRole("button", { name: "Hide todos for Write the spec" })
+    .click();
+  await expect(spec.getByRole("checkbox")).toHaveCount(0);
+});
+
 test("toggles a todo from the list", async ({ page }) => {
   await choose(page);
+  await card(page, "Write the spec")
+    .getByRole("button", { name: "Show todos for Write the spec" })
+    .click();
   const review = card(page, "Write the spec").getByRole("checkbox", {
     name: "Review",
   });

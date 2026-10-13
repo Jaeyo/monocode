@@ -2,7 +2,9 @@ import type {
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
 } from "react";
-import { Check, CircleAlert } from "../../../shared/ui/icons";
+import { useState } from "react";
+import { Check, ChevronRight, CircleAlert } from "../../../shared/ui/icons";
+import { isTodoListOpen, setTodoListOpen } from "../model/taskViewState";
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
 import type { InboxProvider } from "../../inbox/model/githubTasks";
 import {
@@ -75,6 +77,41 @@ export function TaskLinkChip({
       ) : null}
       <span className="min-w-0 truncate">{linkLabel(link)}</span>
       <LinkStateMark link={link} />
+    </button>
+  );
+}
+
+/** Folds a card's todo list; the count stays visible while it is folded. */
+function TodoListToggle({
+  task,
+  open,
+  onToggle,
+}: {
+  task: Task;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const { done, total } = todoProgress(task);
+  return (
+    <button
+      type="button"
+      data-no-drag
+      aria-expanded={open}
+      aria-label={`${open ? "Hide" : "Show"} todos for ${task.title}`}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle();
+      }}
+      className="flex w-fit items-center gap-1 rounded px-0.5 text-[12px] text-content/50 hover:bg-content/5 hover:text-content/80"
+    >
+      <ChevronRight
+        className={`size-3 transition-transform ${open ? "rotate-90" : ""}`}
+        strokeWidth={2}
+      />
+      Todos
+      <span className="tabular-nums text-content/40">
+        {done}/{total}
+      </span>
     </button>
   );
 }
@@ -224,7 +261,11 @@ export function TaskCard({
   onContextMenu,
   onOpenLink,
 }: Props) {
-  const progress = todoProgress(task);
+  const [todosOpen, setTodosOpen] = useState(() => isTodoListOpen(task.id));
+  const toggleTodos = () => {
+    setTodoListOpen(task.id, !todosOpen);
+    setTodosOpen(!todosOpen);
+  };
   return (
     <div
       ref={setRef}
@@ -267,14 +308,6 @@ export function TaskCard({
             />
           </span>
         ) : null}
-        {progress.total > 0 ? (
-          <span
-            className="shrink-0 text-[11px] tabular-nums text-content/45"
-            title={`${progress.done} of ${progress.total} todos done`}
-          >
-            {progress.done}/{progress.total}
-          </span>
-        ) : null}
         <DueChip task={task} doneColumn={doneColumn} />
       </div>
       {task.links.length > 0 ? (
@@ -291,7 +324,10 @@ export function TaskCard({
       ) : null}
       <DoneSuggestion task={task} doneColumn={doneColumn} />
       {task.todos.length > 0 ? (
-        <ul className="flex flex-col gap-0.5 pt-0.5">
+        <TodoListToggle task={task} open={todosOpen} onToggle={toggleTodos} />
+      ) : null}
+      {task.todos.length > 0 && todosOpen ? (
+        <ul className="flex flex-col gap-1 pt-0.5">
           {task.todos.map((todo, index) => (
             <li
               key={`${index}:${todo.text}`}
@@ -313,18 +349,18 @@ export function TaskCard({
                     done: !todo.done,
                   });
                 }}
-                className={`mt-[3px] grid size-3 shrink-0 place-items-center rounded-[3px] border disabled:opacity-40 ${
+                className={`mt-[3px] grid size-3.5 shrink-0 place-items-center rounded-[3px] border disabled:opacity-40 ${
                   todo.done
                     ? "border-accent bg-accent text-white"
                     : "border-content/30 hover:border-content/60"
                 }`}
               >
                 {todo.done ? (
-                  <Check className="size-2.5" strokeWidth={3} />
+                  <Check className="size-3" strokeWidth={3} />
                 ) : null}
               </button>
               <span
-                className={`min-w-0 flex-1 text-[12px] leading-snug ${
+                className={`min-w-0 flex-1 text-[13px] leading-snug ${
                   todo.done ? "text-content/40 line-through" : "text-content/75"
                 }`}
               >

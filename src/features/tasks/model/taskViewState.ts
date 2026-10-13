@@ -82,6 +82,39 @@ export function takeTaskSelection(): Pick<Task, "id" | "path"> | null {
   return selection;
 }
 
+const TODOS_OPEN_KEY = "monocode.tasksTodosOpen";
+
+function readOpenTodos(): Set<string> {
+  try {
+    const parsed: unknown = JSON.parse(
+      localStorage.getItem(TODOS_OPEN_KEY) ?? "[]",
+    );
+    return new Set(
+      Array.isArray(parsed)
+        ? parsed.filter((id) => typeof id === "string")
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+/** A card's todo list starts folded; the tasks the user opened stay open. */
+export function isTodoListOpen(taskId: string): boolean {
+  return readOpenTodos().has(taskId);
+}
+
+export function setTodoListOpen(taskId: string, open: boolean): void {
+  try {
+    const ids = readOpenTodos();
+    if (open) ids.add(taskId);
+    else ids.delete(taskId);
+    localStorage.setItem(TODOS_OPEN_KEY, JSON.stringify([...ids]));
+  } catch {
+    // Not remembering a fold is harmless.
+  }
+}
+
 /** Absolute path of a task file. */
 export function taskFilePath(root: string, task: Pick<Task, "path">): string {
   return `${root.replace(/\/+$/, "")}/${task.path}`;
