@@ -7,6 +7,7 @@ import {
   isTrackerSource,
   type InboxFilters,
   type InboxSource,
+  type InboxTaskFilter,
   type InboxTimeFilter,
   type LinearProjectOption,
 } from "../model/inboxFilters";
@@ -16,6 +17,12 @@ import { Popover } from "../../../shared/ui/Popover";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 
 export const INBOX_FILTER_MENU_WIDTH = 228;
+
+const TASK_OPTIONS: { id: InboxTaskFilter; label: string }[] = [
+  { id: "all", label: "All items" },
+  { id: "linked", label: "Linked to a task" },
+  { id: "unlinked", label: "Not in any task" },
+];
 
 type ProjectOption = {
   path: string;
@@ -288,6 +295,16 @@ export function InboxFiltersMenu({
           ))}
         </>
       ) : null}
+
+      <SectionLabel>Tasks</SectionLabel>
+      {TASK_OPTIONS.map((option) => (
+        <FilterItem
+          key={option.id}
+          label={option.label}
+          checked={filters.task === option.id}
+          onClick={() => onChange({ ...filters, task: option.id })}
+        />
+      ))}
 
       <SectionLabel>View</SectionLabel>
       <FilterItem

@@ -5,6 +5,7 @@ import {
   FolderPlus,
   Internet,
   Inbox,
+  CheckList,
   MoreHorizontal,
   Pin,
   PinOff,
@@ -106,7 +107,10 @@ type Props = {
   onOpenInbox?: () => void;
   inboxActive?: boolean;
   notesEnabled?: boolean;
+  onOpenTasks?: () => void;
   onOpenNotes?: () => void;
+  tasksActive?: boolean;
+  tasksOverdue?: number;
   notesActive?: boolean;
   onOpenAutomations?: () => void;
   automationsActive?: boolean;
@@ -145,7 +149,10 @@ export function ProjectRail({
   onOpenInbox,
   inboxActive = false,
   notesEnabled = true,
+  onOpenTasks,
   onOpenNotes,
+  tasksActive = false,
+  tasksOverdue = 0,
   notesActive = false,
   onOpenAutomations,
   automationsActive = false,
@@ -333,6 +340,7 @@ export function ProjectRail({
   const otherViewActive =
     searchActive ||
     inboxActive ||
+    tasksActive ||
     notesActive ||
     automationsActive ||
     !!monos?.activeId;
@@ -395,6 +403,16 @@ export function ProjectRail({
               active={inboxActive}
               dot={inboxUnseen}
               ariaLabel={inboxUnseen ? "Inbox, new items" : "Inbox"}
+            />
+            <RailAction
+              label="Tasks"
+              icon={CheckList}
+              onClick={onOpenTasks}
+              active={tasksActive}
+              badge={tasksOverdue > 0 ? tasksOverdue : undefined}
+              ariaLabel={
+                tasksOverdue > 0 ? `Tasks, ${tasksOverdue} overdue` : "Tasks"
+              }
             />
             {notesEnabled ? (
               <RailAction

@@ -40,6 +40,9 @@ export type NoteCardMeta = {
   slug: string;
   title: string;
   sourceCwd?: string;
+  /** A Tasks task rides the same chip; `taskPath` finds its file again. */
+  kind?: "task";
+  taskPath?: string;
 };
 
 /** Composer chip: display fields plus the body injected into the harness prompt. */
@@ -53,6 +56,8 @@ export function noteCardMeta(card: NoteComposerCard): NoteCardMeta {
     slug: card.slug,
     title: card.title,
     ...(card.sourceCwd ? { sourceCwd: card.sourceCwd } : {}),
+    ...(card.kind === "task" ? { kind: "task" as const } : {}),
+    ...(card.taskPath ? { taskPath: card.taskPath } : {}),
   };
 }
 
@@ -348,6 +353,18 @@ export function composeNoteMessage(
   text: string,
 ): string {
   if (!card) return text.trim();
+  if (card.kind === "task") {
+    const lead = text.trim() || "Work on this task.";
+    const heading = card.title.trim() || "Untitled";
+    return [
+      lead,
+      "",
+      "---",
+      `Referenced task "${heading}":`,
+      "",
+      card.body.trim(),
+    ].join("\n");
+  }
   const lead = text.trim() || "Use this note.";
   return injectNotePrompt(lead, [
     {

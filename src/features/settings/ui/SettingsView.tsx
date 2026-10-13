@@ -195,6 +195,12 @@ import {
   projectName,
 } from "../../../shared/lib/paths";
 import { revealPath } from "../../../platform/tauri/fs";
+import { useTasks } from "../../tasks/model/tasksStore";
+import { promptForTasksRoot } from "../../tasks/model/tasksRoot";
+import {
+  saveDueRemindersEnabled,
+  useDueRemindersEnabled,
+} from "../../tasks/model/taskReminders";
 import { IS_LINUX, IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import {
   loadArchivedProjects,
@@ -621,6 +627,7 @@ export function SettingsView({
                   notificationSettingsRequest={notificationSettingsRequest}
                 />
               ) : null}
+              {section === "tasks" ? <TasksPage /> : null}
               {section === "archive" ? (
                 <ArchivePage
                   cwd={cwd}
@@ -1189,6 +1196,64 @@ function ChatPage() {
         </Row>
       </Group>
     </>
+  );
+}
+
+function TasksPage() {
+  const tasks = useTasks();
+  const dueReminders = useDueRemindersEnabled();
+  const [busy, setBusy] = useState(false);
+  const choose = async () => {
+    setBusy(true);
+    try {
+      await promptForTasksRoot();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Group
+      id="tasks"
+      title="Tasks"
+      description="Each task is a markdown file inside a column folder. Edit the files anywhere, then press Refresh in Tasks."
+    >
+      <Row
+        id="tasks-folder"
+        label="Tasks folder"
+        description={
+          tasks.root
+            ? tasks.status === "missing"
+              ? `${tasks.root} — this folder cannot be found.`
+              : tasks.root
+            : "No folder chosen yet."
+        }
+      >
+        <div className="flex items-center gap-2">
+          {tasks.root ? (
+            <SecondaryButton
+              onClick={() => void revealPath(tasks.root ?? "")}
+              disabled={tasks.status === "missing"}
+            >
+              Reveal
+            </SecondaryButton>
+          ) : null}
+          <SecondaryButton onClick={() => void choose()} disabled={busy}>
+            {tasks.root ? "Change…" : "Choose…"}
+          </SecondaryButton>
+        </div>
+      </Row>
+      <Row
+        id="tasks-due-reminders"
+        label="Due reminders"
+        description="Once a day from 9:00, a notification for tasks due today or overdue."
+      >
+        <Toggle
+          label="Due reminders"
+          on={dueReminders}
+          onChange={saveDueRemindersEnabled}
+        />
+      </Row>
+    </Group>
   );
 }
 

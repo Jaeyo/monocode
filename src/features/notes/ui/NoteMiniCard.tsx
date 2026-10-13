@@ -1,4 +1,5 @@
-import { File, X } from "../../../shared/ui/icons";
+import { CheckList, File, X } from "../../../shared/ui/icons";
+import { openTaskFromChip } from "../../tasks/model/taskViewState";
 import { useState } from "react";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
@@ -28,6 +29,7 @@ export function NoteMiniCard({ card, onDismiss, embedded = false }: Props) {
   const [mascots] = useState(loadTabGroupMascots);
   const [colors] = useState(loadTabGroupColors);
   const [customColors] = useState(loadTabGroupCustomColors);
+  const task = card.kind === "task";
   const project = noteSourceProject(card.sourceCwd);
   const key = card.sourceCwd ? projectKey(card.sourceCwd) : null;
   const logoPath = key ? resolveTabGroupLogo(key, logos) : null;
@@ -45,17 +47,38 @@ export function NoteMiniCard({ card, onDismiss, embedded = false }: Props) {
     >
       <div className="flex w-full flex-col text-left">
         <span className="flex min-w-0 items-center gap-1.5">
-          <File
-            className="size-3.5 shrink-0 text-content/45"
-            strokeWidth={1.75}
-          />
+          {task ? (
+            <CheckList
+              className="size-3.5 shrink-0 text-content/45"
+              strokeWidth={1.75}
+            />
+          ) : (
+            <File
+              className="size-3.5 shrink-0 text-content/45"
+              strokeWidth={1.75}
+            />
+          )}
           <span className="min-w-0 truncate text-[11px] text-content/50">
-            Note{!embedded && card.slug ? ` · ${card.slug}` : ""}
+            {task ? "Task" : "Note"}
+            {!task && !embedded && card.slug ? ` · ${card.slug}` : ""}
           </span>
         </span>
-        <span className="mt-1 line-clamp-1 text-[13px] font-semibold leading-snug text-content">
-          {card.title || "Untitled"}
-        </span>
+        {task ? (
+          <button
+            type="button"
+            title="Open in Tasks"
+            onClick={() =>
+              openTaskFromChip({ id: card.id, path: card.taskPath ?? "" })
+            }
+            className="mt-1 line-clamp-1 text-left text-[13px] font-semibold leading-snug text-content hover:underline"
+          >
+            {card.title || "Untitled"}
+          </button>
+        ) : (
+          <span className="mt-1 line-clamp-1 text-[13px] font-semibold leading-snug text-content">
+            {card.title || "Untitled"}
+          </span>
+        )}
         {!embedded && project ? (
           <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-content/45">
             {logoPath ? (
@@ -80,7 +103,7 @@ export function NoteMiniCard({ card, onDismiss, embedded = false }: Props) {
         <button
           type="button"
           title="Remove"
-          aria-label={`Remove note ${card.title || "Untitled"}`}
+          aria-label={`Remove ${task ? "task" : "note"} ${card.title || "Untitled"}`}
           onClick={onDismiss}
           className="absolute right-1.5 top-1.5 grid size-5 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content"
         >

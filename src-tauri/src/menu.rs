@@ -148,9 +148,9 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         "close_other_tabs" | "next_tab" | "prev_tab" | "back_tab" | "forward_tab"
         | "split_right" | "split_down" | "focus_left" | "focus_right" | "focus_up"
         | "focus_down" | "sidebar_opacity" | "open_project" | "go_to_file" | "open_search"
-        | "open_inbox" | "open_notes" | "find_in_project" | "find" | "new_terminal"
-        | "new_terminal_tab" | "toggle_terminal" | "open_model_picker" | "open_settings"
-        | "check_for_updates" => {
+        | "open_inbox" | "open_tasks" | "open_notes" | "find_in_project" | "find"
+        | "new_terminal" | "new_terminal_tab" | "toggle_terminal" | "open_model_picker"
+        | "open_settings" | "check_for_updates" => {
             let _ = app.emit(id, ());
         }
         // New Tab, Close Tab, Sidebar, Zoom, Reload, Command Palette, and Close All Tabs target
@@ -248,6 +248,7 @@ fn build(
         overrides,
     )?;
     let open_inbox = MenuItemBuilder::with_id("open_inbox", "Inbox").build(app)?;
+    let open_tasks = MenuItemBuilder::with_id("open_tasks", "Tasks").build(app)?;
     let open_notes = MenuItemBuilder::with_id("open_notes", "Notes").build(app)?;
     let new_tab = menu_item(
         app,
@@ -482,6 +483,7 @@ fn build(
         .item(&toggle_sidebar)
         .item(&toggle_session_sidebar)
         .item(&open_inbox)
+        .item(&open_tasks)
         .item(&open_notes)
         .item(&toggle_terminal)
         .item(&open_model_picker)

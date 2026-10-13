@@ -4,6 +4,7 @@ import {
   ChevronRight,
   DashboardSquare,
   Inbox,
+  CheckList,
   PanelLeft,
   Settings,
   StickyNote,
@@ -118,6 +119,7 @@ type Props = {
   onNewTerminal?: () => void;
   onOpenSettings?: () => void;
   onOpenInbox?: () => void;
+  onOpenTasks?: () => void;
   onOpenNotes?: () => void;
   onClose: (id: string) => void;
   onCloseMany: (ids: string[], fallbackId: string) => void;
@@ -640,6 +642,7 @@ function TitleBarComponent({
   onNewTerminal,
   onOpenSettings,
   onOpenInbox,
+  onOpenTasks,
   onOpenNotes,
   onClose,
   onCloseMany,
@@ -930,6 +933,11 @@ function TitleBarComponent({
             {projectless && railClosed && onOpenInbox ? (
               <IconButton label="Inbox" onClick={onOpenInbox}>
                 <Inbox className="size-3.5" strokeWidth={1.75} />
+              </IconButton>
+            ) : null}
+            {projectless && railClosed && onOpenTasks ? (
+              <IconButton label="Tasks" onClick={onOpenTasks}>
+                <CheckList className="size-3.5" strokeWidth={1.75} />
               </IconButton>
             ) : null}
             {projectless && railClosed && onOpenNotes ? (

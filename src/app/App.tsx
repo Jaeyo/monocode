@@ -87,6 +87,25 @@ import {
 import { useStableValue } from "../shared/hooks/useStableValue";
 import { Sidebar } from "./shell/Sidebar";
 import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
+import { ToastHost } from "../shared/ui/Toasts";
+import {
+  peekTasks,
+  startTasks,
+  subscribeTasks,
+} from "../features/tasks/model/tasksStore";
+import {
+  maybeRemindDue,
+  TASKS_DUE_NOTIFICATION_ID,
+  useOverdueTaskCount,
+} from "../features/tasks/model/taskReminders";
+import type { Task } from "../features/tasks/model/tasks";
+import {
+  OPEN_TASK_EVENT,
+  requestOverdueFilter,
+  requestTaskSelection,
+} from "../features/tasks/model/taskViewState";
+import { linkTaskSession } from "../features/tasks/model/taskSession";
+import { QuickTaskDialog } from "../features/tasks/ui/QuickTaskDialog";
 import { HarnessUpdateNotice } from "../features/providers/ui/HarnessUpdateNotice";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
 import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDialog";
@@ -832,6 +851,13 @@ const NotesView = lazySurface(
   },
   { suspense: false },
 );
+const TasksView = lazySurface(
+  async () => {
+    const module = await import("../features/tasks/ui/TasksView");
+    return { default: module.TasksView };
+  },
+  { suspense: false },
+);
 const AutomationsView = lazySurface(
   async () => {
     const module = await import("../features/automations/ui/AutomationsView");
@@ -1242,6 +1268,8 @@ function Workspace({
     useState<InboxSessionPortal | null>(null);
   const openingInboxSessions = useRef(new Map<string, Promise<string>>());
   const [notesViewOpen, setNotesViewOpen] = useState(false);
+  const [tasksViewOpen, setTasksViewOpen] = useState(false);
+  const [quickTaskOpen, setQuickTaskOpen] = useState(false);
   const [automationsViewOpen, setAutomationsViewOpen] = useState(false);
   const [inspectedWorkerId, setInspectedWorkerId] = useState<string | null>(
     null,
@@ -1273,6 +1301,7 @@ function Workspace({
   const settingsReturnViewRef = useRef({
     search: false,
     inbox: false,
+    tasks: false,
     notes: false,
     automations: false,
   });
@@ -1497,6 +1526,7 @@ function Workspace({
       !searchViewOpen &&
       !inboxViewOpen &&
       !notesViewOpen &&
+      !tasksViewOpen &&
       !automationsViewOpen &&
       !settingsOpen &&
       !monoViewId,
@@ -1504,6 +1534,7 @@ function Workspace({
       ? inboxAskPortal?.sessionId
       : !searchViewOpen &&
           !notesViewOpen &&
+          !tasksViewOpen &&
           !automationsViewOpen &&
           !settingsOpen
         ? (monoViewId ?? undefined)
@@ -1512,6 +1543,7 @@ function Workspace({
       !inboxViewOpen &&
       !searchViewOpen &&
       !notesViewOpen &&
+      !tasksViewOpen &&
       !automationsViewOpen &&
       !settingsOpen
         ? shownMonoSessionId
@@ -1519,6 +1551,8 @@ function Workspace({
   };
   const notesViewOpenRef = useRef(notesViewOpen);
   notesViewOpenRef.current = notesViewOpen;
+  const tasksViewOpenRef = useRef(tasksViewOpen);
+  tasksViewOpenRef.current = tasksViewOpen;
   const automationsViewOpenRef = useRef(automationsViewOpen);
   automationsViewOpenRef.current = automationsViewOpen;
   const settingsOpenRef = useRef(settingsOpen);
@@ -1551,6 +1585,30 @@ function Workspace({
   useEffect(() => {
     if (!notesEnabled) setNotesViewOpen(false);
   }, [notesEnabled]);
+
+  // Inbox badges need task links before the Tasks view is ever opened.
+  useEffect(() => {
+    startTasks();
+  }, []);
+
+  // One bundled due-date reminder a day: checked as tasks load, then every
+  // half hour so a morning start or a day rollover is caught.
+  useEffect(() => {
+    let lastBoard = peekTasks().board;
+    const check = () => void maybeRemindDue(peekTasks().board);
+    const unsubscribe = subscribeTasks(() => {
+      const board = peekTasks().board;
+      if (board && !lastBoard) check();
+      lastBoard = board;
+    });
+    const timer = window.setInterval(check, 30 * 60_000);
+    check();
+    return () => {
+      unsubscribe();
+      window.clearInterval(timer);
+    };
+  }, []);
+  const tasksOverdue = useOverdueTaskCount();
 
   useEffect(
     () =>
@@ -2232,6 +2290,7 @@ function Workspace({
             !searchViewOpenRef.current &&
             !inboxViewOpenRef.current &&
             !notesViewOpenRef.current &&
+            !tasksViewOpenRef.current &&
             !automationsViewOpenRef.current &&
             !settingsOpenRef.current
           ) {
@@ -2270,6 +2329,7 @@ function Workspace({
     shownMonoSessionId,
     searchViewOpen,
     notesViewOpen,
+    tasksViewOpen,
     automationsViewOpen,
     settingsOpen,
     flushForegroundHarnessEvents,
@@ -2763,6 +2823,7 @@ function Workspace({
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setTasksViewOpen(false);
     setAutomationsViewOpen(false);
     const cwd = sidebarCwd;
     const session = newWorkspaceSession(cwd, sessionDefaults?.runtimeMode);
@@ -2779,6 +2840,7 @@ function Workspace({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setTasksViewOpen(false);
       setAutomationsViewOpen(false);
       const existing = findRemoteSessionTab(
         tabsRef.current,
@@ -2807,6 +2869,7 @@ function Workspace({
       const start = (description?: string) => {
         setInboxViewOpen(false);
         setNotesViewOpen(false);
+        setTasksViewOpen(false);
         setAutomationsViewOpen(false);
         const cwd =
           item.projectPath || active?.cwd || sessionDefaults?.cwd || projectCwd;
@@ -2846,6 +2909,7 @@ function Workspace({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setTasksViewOpen(false);
       setAutomationsViewOpen(false);
       const cwd =
         (card.sourceCwd && looksLikeProject(card.sourceCwd)
@@ -2866,6 +2930,10 @@ function Workspace({
       appendTab(tab, cwd);
       setActiveTabId(tab.id);
       setComposerFocused(true);
+      // The task file lists its sessions, so the link survives either side.
+      if (card.kind === "task") {
+        void linkTaskSession({ ...card, sourceCwd: cwd }, session.id);
+      }
     },
     [
       active?.cwd,
@@ -4750,6 +4818,7 @@ function Workspace({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setTasksViewOpen(false);
       setAutomationsViewOpen(false);
       lastMonoIdRef.current = monoId;
       const session = await ensureMonoSession(monoId, {
@@ -5067,6 +5136,7 @@ function Workspace({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setTasksViewOpen(false);
       setAutomationsViewOpen(false);
       setSettingsOpen(false);
       setFilePickerOpen(false);
@@ -5669,6 +5739,7 @@ function Workspace({
             searchViewOpenRef.current ||
             inboxViewOpenRef.current ||
             notesViewOpenRef.current ||
+            tasksViewOpenRef.current ||
             automationsViewOpenRef.current ||
             settingsOpenRef.current ||
             filePickerOpenRef.current ||
@@ -6243,6 +6314,7 @@ function Workspace({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setTasksViewOpen(false);
       setAutomationsViewOpen(false);
 
       // At most one folder can take the blank session, and it keeps the
@@ -8606,6 +8678,7 @@ function Workspace({
           setSearchViewOpen(false);
           setInboxViewOpen(false);
           setNotesViewOpen(false);
+          setTasksViewOpen(false);
           setAutomationsViewOpen(false);
           setSidebarTab("sessions", session.cwd);
         }
@@ -8752,6 +8825,7 @@ function Workspace({
             setSearchViewOpen(false);
             setInboxViewOpen(false);
             setNotesViewOpen(false);
+            setTasksViewOpen(false);
             setAutomationsViewOpen(false);
             setSidebarTab("sessions", cwd);
           },
@@ -11438,6 +11512,7 @@ function Workspace({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setTasksViewOpen(false);
       setAutomationsViewOpen(false);
       onOpenApprovalSession(sessionId);
     },
@@ -11588,6 +11663,7 @@ function Workspace({
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setTasksViewOpen(false);
     setAutomationsViewOpen(false);
     setFilePickerInitialQuery("");
     setFilePickerResetToken((token) => token + 1);
@@ -11597,6 +11673,7 @@ function Workspace({
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setTasksViewOpen(false);
     setAutomationsViewOpen(false);
     setFilePickerInitialQuery(">");
     setFilePickerResetToken((token) => token + 1);
@@ -11613,6 +11690,7 @@ function Workspace({
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setTasksViewOpen(false);
     setAutomationsViewOpen(false);
     setSidebarTab("files");
     setFilesSearchOpen(true);
@@ -11626,6 +11704,7 @@ function Workspace({
       setSettingsOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setTasksViewOpen(false);
       setAutomationsViewOpen(false);
       setSearchViewOpen(true);
       setSearchViewFocusToken((token) => token + 1);
@@ -11643,6 +11722,7 @@ function Workspace({
       setSettingsOpen(false);
       setSearchViewOpen(false);
       setNotesViewOpen(false);
+      setTasksViewOpen(false);
       setAutomationsViewOpen(false);
       setInboxViewOpen(true);
     });
@@ -11656,6 +11736,7 @@ function Workspace({
       setSettingsOpen(false);
       setSearchViewOpen(false);
       setNotesViewOpen(false);
+      setTasksViewOpen(false);
       setAutomationsViewOpen(false);
       setInboxViewOpen(false);
       const cwd =
@@ -11687,6 +11768,18 @@ function Workspace({
   const onOpenInboxSession = useCallback(
     (sessionId: string) => {
       setInboxViewOpen(false);
+      const cwd =
+        sessionsRef.current.find((session) => session.id === sessionId)?.cwd ??
+        history.find((session) => session.id === sessionId)?.cwd;
+      setSidebarTab("sessions", cwd);
+      void onSelectHistorySession(sessionId);
+    },
+    [history, onSelectHistorySession],
+  );
+
+  const onOpenTaskSession = useCallback(
+    (sessionId: string) => {
+      setTasksViewOpen(false);
       const cwd =
         sessionsRef.current.find((session) => session.id === sessionId)?.cwd ??
         history.find((session) => session.id === sessionId)?.cwd;
@@ -11739,6 +11832,7 @@ function Workspace({
       );
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setTasksViewOpen(false);
       setSearchViewOpen(false);
       setSidebarTab("sessions", cwd);
       await onSelectHistorySession(session.id);
@@ -11759,6 +11853,7 @@ function Workspace({
       setSettingsOpen(false);
       setSearchViewOpen(false);
       setInboxViewOpen(false);
+      setTasksViewOpen(false);
       setAutomationsViewOpen(false);
       setNotesViewOpen(true);
     });
@@ -11768,6 +11863,41 @@ function Workspace({
     setNotesViewOpen(false);
   }, []);
 
+  const onOpenTasks = useCallback(() => {
+    workspaceNavigation.cancel();
+    startTransition(() => {
+      setFilePickerOpen(false);
+      setSettingsOpen(false);
+      setSearchViewOpen(false);
+      setInboxViewOpen(false);
+      setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
+      setTasksViewOpen(true);
+    });
+  }, []);
+
+  const onLeaveTasks = useCallback(() => {
+    setTasksViewOpen(false);
+  }, []);
+
+  const onOpenTaskFromElsewhere = useCallback(
+    (task: Pick<Task, "id" | "path">) => {
+      requestTaskSelection(task);
+      onOpenTasks();
+    },
+    [onOpenTasks],
+  );
+
+  // A session's task chip asks for its task.
+  useEffect(() => {
+    const onOpen = (event: Event) => {
+      const task = (event as CustomEvent<Pick<Task, "id" | "path">>).detail;
+      if (task?.id) onOpenTaskFromElsewhere(task);
+    };
+    window.addEventListener(OPEN_TASK_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_TASK_EVENT, onOpen);
+  }, [onOpenTaskFromElsewhere]);
+
   const onOpenAutomations = useCallback(() => {
     workspaceNavigation.cancel();
     startTransition(() => {
@@ -11776,6 +11906,7 @@ function Workspace({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setTasksViewOpen(false);
       setAutomationsViewOpen(true);
     });
   }, []);
@@ -11793,6 +11924,7 @@ function Workspace({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setTasksViewOpen(false);
       setSettingsOpen(false);
       setFilePickerOpen(false);
       setSidebarTab("sessions", session.cwd);
@@ -11810,6 +11942,7 @@ function Workspace({
         settingsReturnViewRef.current = {
           search: searchViewOpenRef.current,
           inbox: inboxViewOpenRef.current,
+          tasks: tasksViewOpenRef.current,
           notes: notesViewOpenRef.current,
           automations: automationsViewOpenRef.current,
         };
@@ -11819,6 +11952,7 @@ function Workspace({
         setSearchViewOpen(false);
         setInboxViewOpen(false);
         setNotesViewOpen(false);
+        setTasksViewOpen(false);
         setAutomationsViewOpen(false);
         if (section) {
           setSettingsSection(section);
@@ -11871,6 +12005,7 @@ function Workspace({
     const returnView = settingsReturnViewRef.current;
     setSearchViewOpen(returnView.search);
     setInboxViewOpen(returnView.inbox);
+    setTasksViewOpen(returnView.tasks);
     setNotesViewOpen(returnView.notes && loadNotesEnabled());
     setAutomationsViewOpen(returnView.automations);
     setSettingsOpen(false);
@@ -11902,6 +12037,10 @@ function Workspace({
       setInboxViewOpen(false);
       return;
     }
+    if (tasksViewOpen) {
+      setTasksViewOpen(false);
+      return;
+    }
     if (notesViewOpen) {
       setNotesViewOpen(false);
       return;
@@ -11924,6 +12063,7 @@ function Workspace({
     settingsOpen,
     inboxViewOpen,
     notesViewOpen,
+    tasksViewOpen,
     automationsViewOpen,
   ]);
 
@@ -11932,6 +12072,7 @@ function Workspace({
     setSettingsOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setTasksViewOpen(false);
     setAutomationsViewOpen(false);
     onVisitForward();
   }, [onVisitForward]);
@@ -12077,6 +12218,7 @@ function Workspace({
     onFindInProject,
     onOpenSearch,
     onOpenInbox,
+    onOpenTasks,
     onOpenNotes,
     pickProject,
     onNewTerminal,
@@ -12109,6 +12251,7 @@ function Workspace({
     onFindInProject,
     onOpenSearch,
     onOpenInbox,
+    onOpenTasks,
     onOpenNotes,
     pickProject,
     onNewTerminal,
@@ -12203,6 +12346,7 @@ function Workspace({
             searchViewOpenRef.current ||
             inboxViewOpenRef.current ||
             notesViewOpenRef.current ||
+            tasksViewOpenRef.current ||
             automationsViewOpenRef.current ||
             settingsOpenRef.current ||
             filePickerOpenRef.current ||
@@ -12286,6 +12430,7 @@ function Workspace({
         !searchViewOpenRef.current &&
         !inboxViewOpenRef.current &&
         !notesViewOpenRef.current &&
+        !tasksViewOpenRef.current &&
         !automationsViewOpenRef.current &&
         !(
           e.target instanceof Element &&
@@ -12330,6 +12475,7 @@ function Workspace({
           run("open_settings", () => a.openSettings());
         else if (shortcut === "App: Find in Files")
           run("find_in_project", a.onFindInProject);
+        else if (shortcut === "App: New Task") setQuickTaskOpen(true);
         return;
       }
     };
@@ -12403,6 +12549,7 @@ function Workspace({
       listen("open_search", () => actions.current.onOpenSearch()),
       listen("open_inbox", () => actions.current.onOpenInbox()),
       listen("open_notes", () => actions.current.onOpenNotes()),
+      listen("open_tasks", () => actions.current.onOpenTasks()),
       listen("open_settings", () => actions.current.openSettings()),
       listen("check_for_updates", () => {
         void runUpdateFlow(true);
@@ -12419,6 +12566,16 @@ function Workspace({
       }),
       // Every window hears the click; only the one holding the session acts.
       listen<string>(NOTIFICATION_CLICK_EVENT, ({ payload: sessionId }) => {
+        if (sessionId === TASKS_DUE_NOTIFICATION_ID) {
+          const win = getCurrentWindow();
+          void win
+            .unminimize()
+            .then(() => win.setFocus())
+            .catch(() => {});
+          requestOverdueFilter();
+          actions.current.onOpenTasks();
+          return;
+        }
         if (!sessionsRef.current.some((s) => s.id === sessionId)) return;
         const win = getCurrentWindow();
         // Windows leaves a minimized window minimized when it is only focused.
@@ -12897,6 +13054,7 @@ function Workspace({
     settingsOpen ||
     inboxViewOpen ||
     notesViewOpen ||
+    tasksViewOpen ||
     automationsViewOpen;
   const compactProjectRail = collapsedProjectRailMode === "compact";
   const compactRailActive = compactProjectRail && !projectRailOpen;
@@ -12942,6 +13100,7 @@ function Workspace({
       onNewTerminal={onNewTerminal}
       onOpenSettings={onOpenSettings}
       onOpenInbox={onOpenInbox}
+      onOpenTasks={onOpenTasks}
       onOpenNotes={notesEnabled ? onOpenNotes : undefined}
       onClose={onCloseTitleTab}
       onCloseMany={onCloseTabs}
@@ -13025,6 +13184,7 @@ function Workspace({
                 settingsOpen ||
                 inboxViewOpen ||
                 notesViewOpen ||
+                tasksViewOpen ||
                 automationsViewOpen
               }
               canGoForward={tabVisitNav.canForward}
@@ -13063,11 +13223,14 @@ function Workspace({
               onSearch={onOpenSearch}
               onOpenInbox={onOpenInbox}
               onOpenInboxItem={onOpenLinkedWorkItem}
+              onOpenTasks={onOpenTasks}
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
               onOpenAutomations={onOpenAutomations}
               onGoToFile={onGoToFile}
               searchActive={searchViewOpen}
               inboxActive={inboxViewOpen}
+              tasksActive={tasksViewOpen}
+              tasksOverdue={tasksOverdue}
               notesActive={notesViewOpen}
               automationsActive={automationsViewOpen}
               notesEnabled={notesEnabled}
@@ -13096,6 +13259,7 @@ function Workspace({
                   settingsOpen ||
                   inboxViewOpen ||
                   notesViewOpen ||
+                  tasksViewOpen ||
                   automationsViewOpen
                     ? "hidden"
                     : "flex min-h-0 min-w-0 flex-1 flex-col"
@@ -13105,6 +13269,7 @@ function Workspace({
                   settingsOpen ||
                   inboxViewOpen ||
                   notesViewOpen ||
+                  tasksViewOpen ||
                   automationsViewOpen
                 }
                 inert={
@@ -13112,6 +13277,7 @@ function Workspace({
                   settingsOpen ||
                   inboxViewOpen ||
                   notesViewOpen ||
+                  tasksViewOpen ||
                   automationsViewOpen ||
                   undefined
                 }
@@ -13134,6 +13300,7 @@ function Workspace({
                     onFindInProject={onFindInProject}
                     onSearch={onOpenSearch}
                     onOpenInbox={onOpenInbox}
+                    onOpenTasks={onOpenTasks}
                     onOpenNotes={notesEnabled ? onOpenNotes : undefined}
                     onZoomIn={() => {
                       const next = saveUiScale(zoomInUiScale(loadUiScale()));
@@ -13341,6 +13508,7 @@ function Workspace({
                             !settingsOpen &&
                             !inboxViewOpen &&
                             !notesViewOpen &&
+                            !tasksViewOpen &&
                             !automationsViewOpen &&
                             !monoViewId &&
                             activeLinkedWorkItemPanel?.sessionId ===
@@ -13420,6 +13588,19 @@ function Workspace({
                   onRepairChecks={onRepairChecks}
                   onOpenSession={onOpenInboxSession}
                   onOpenIntegrations={onOpenInboxIntegrations}
+                  onOpenTask={onOpenTaskFromElsewhere}
+                />
+              ) : null}
+              {tasksViewOpen ? (
+                <TasksView
+                  besideRail={projectRailOpen || compactProjectRail}
+                  compactRail={compactRailActive}
+                  recents={recents}
+                  defaultCwd={sidebarCwd}
+                  sessions={history}
+                  onOpenSession={onOpenTaskSession}
+                  onClose={onLeaveTasks}
+                  onToggleSidebar={onToggleSidebar}
                 />
               ) : null}
               {notesViewOpen ? (
@@ -13477,6 +13658,7 @@ function Workspace({
               {searchViewOpen ||
               inboxViewOpen ||
               notesViewOpen ||
+              tasksViewOpen ||
               automationsViewOpen ||
               settingsOpen ||
               monoCovers ? null : (
@@ -13565,6 +13747,13 @@ function Workspace({
             }
             onHeightChange={setHarnessUpdateHeight}
           />
+          <ToastHost />
+          {quickTaskOpen ? (
+            <QuickTaskDialog
+              onClose={() => setQuickTaskOpen(false)}
+              onOpenTask={onOpenTaskFromElsewhere}
+            />
+          ) : null}
           <ApprovalToasts
             notices={hiddenApprovalToasts}
             topOffset={
