@@ -51,6 +51,7 @@ mod search;
 mod session_store;
 mod skills;
 pub mod ssh_askpass;
+mod system_fonts;
 mod tasks;
 #[cfg(target_os = "macos")]
 mod trackpad_zoom;
@@ -641,6 +642,7 @@ pub fn run() {
             mono_chat::mono_menu_bar_set_visible,
             window_transfer::stage_window_transfer,
             window_transfer::take_window_transfer,
+            system_fonts::list_system_fonts,
             chat_background::save_chat_background,
             chat_background::remove_chat_background,
             chat_background::save_project_chat_background,

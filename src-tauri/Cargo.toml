@@ -37,6 +37,7 @@ arboard = { version = "3.6", features = ["wayland-data-control"] }
 png = "0.18"
 yaml-rust2 = "0.13"
 trash = "5"
+fontdb = "0.24"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
