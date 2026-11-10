@@ -3,6 +3,7 @@ import { hslToRgb, isHexColor, type Rgb } from "../../../shared/lib/colorUtils";
 import { IS_LINUX, IS_MAC } from "../../../platform/tauri/platform";
 import { readFlag, writeFlag } from "./storageFlags";
 import { applyUiScale, loadUiScale } from "./uiScale";
+import { applyFontSettings, watchFontSettings } from "./fonts";
 import {
   applyPreparedNewThreadBackground,
   clearPreparedNewThreadBackground,
@@ -337,6 +338,8 @@ export function initAppearance() {
   applyChatBackgroundSessionOpacity(loadChatBackgroundSessionOpacity());
   applyChatBackgroundScope(loadChatBackgroundScope());
   applyDiffPalette(loadDiffPalette());
+  applyFontSettings();
+  watchFontSettings();
   void applyUiScale(loadUiScale());
 }
 

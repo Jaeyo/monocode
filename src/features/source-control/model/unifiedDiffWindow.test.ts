@@ -5,9 +5,54 @@ import {
   layoutRows,
   rowsHeight,
   UNIFIED_FOLD_PX,
+  UNIFIED_HUNK_PX,
   UNIFIED_LINE_PX,
+  unifiedCodeScale,
+  unifiedLinePx,
   windowRows,
 } from "./unifiedDiffWindow";
+
+describe("unifiedCodeScale", () => {
+  it("is exactly 1 at the default size and proportional otherwise", () => {
+    expect(unifiedCodeScale(null)).toBe(1);
+    expect(unifiedCodeScale(12)).toBe(1);
+    expect(unifiedCodeScale(18)).toBe(1.5);
+  });
+});
+
+describe("unifiedLinePx", () => {
+  it("is the stock row height at the default code size", () => {
+    expect(unifiedLinePx(null)).toBe(UNIFIED_LINE_PX);
+    expect(unifiedLinePx(12)).toBe(UNIFIED_LINE_PX);
+  });
+
+  it("scales rows with the code font so text never overlaps", () => {
+    expect(unifiedLinePx(10)).toBe(17);
+    expect(unifiedLinePx(15)).toBe(25);
+    expect(unifiedLinePx(24)).toBe(40);
+  });
+
+  it("sizes every line row, folded context included, but not hunk headers", () => {
+    const lines: UnifiedLine[] = [
+      { kind: "hunk", text: "@@ -1,20 +1,21 @@", oldNumber: null, newNumber: null },
+      ...rangeContext(1, 10),
+      { kind: "add", text: "new", oldNumber: null, newNumber: 11 },
+      ...rangeContext(12, 20),
+    ];
+    const blocks = foldUnifiedLines(lines, 2);
+    const rows = flattenVisibleRows(
+      blocks,
+      () => ({ start: 3, end: 3 }),
+      false,
+      30,
+    );
+    for (const row of rows) {
+      if (row.type !== "line") continue;
+      expect(row.height).toBe(row.line.kind === "hunk" ? UNIFIED_HUNK_PX : 30);
+    }
+    expect(rows.filter((row) => row.type === "line").length).toBeGreaterThan(5);
+  });
+});
 
 describe("flattenVisibleRows", () => {
   it("keeps fold bars and revealed context as separate rows", () => {

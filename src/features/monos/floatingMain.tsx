@@ -20,6 +20,10 @@ import {
   loadThemeSaturation,
   watchSystemColorScheme,
 } from "../settings/model/appearance";
+import {
+  applyFontSettings,
+  watchFontSettings,
+} from "../settings/model/fonts";
 import { FloatingMonoChat } from "./ui/FloatingMonoChat";
 import { homeDir } from "../../platform/tauri/fs";
 import { setHomeDir } from "../../shared/lib/paths";
@@ -59,6 +63,8 @@ function applyFloatingAppearance() {
 applyFloatingAppearance();
 watchSystemColorScheme();
 window.addEventListener("storage", applyFloatingAppearance);
+applyFontSettings();
+watchFontSettings();
 void homeDir()
   .then(setHomeDir)
   .catch(() => undefined);

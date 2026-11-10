@@ -13,6 +13,7 @@ import {
   loadThemePreference,
   loadThemeSaturation,
 } from "../settings/model/appearance";
+import { applyFontSettings } from "../settings/model/fonts";
 import { QuickGitPopup } from "./ui/QuickGitPopup";
 import { QuickComposer } from "./ui/QuickComposer";
 import { initGithubHost } from "../inbox/model/githubHost";
@@ -31,6 +32,7 @@ function applyAppearance() {
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
   applyThemeDarkLightness(loadThemeDarkLightness());
   const scheme = applyThemePreference(loadThemePreference());
+  applyFontSettings();
   // The native blur follows the window's appearance, not the page's, so
   // match it to the app theme rather than the system one.
   void getCurrentWindow()

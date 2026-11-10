@@ -9,6 +9,25 @@ export const UNIFIED_LINE_PX = 20;
 export const UNIFIED_FOLD_PX = 32;
 export const UNIFIED_HUNK_PX = 22;
 export const UNIFIED_OVERSCAN_PX = 1200;
+/** Line-number gutter width (Tailwind w-12) at the default code size. */
+export const UNIFIED_GUTTER_PX = 48;
+/** The code font size UNIFIED_LINE_PX was tuned for. */
+const UNIFIED_BASE_FONT_PX = 12;
+
+/** Ratio of a custom code font size to the default; 1 when unset. */
+export function unifiedCodeScale(codeFontPx: number | null): number {
+  return codeFontPx == null ? 1 : codeFontPx / UNIFIED_BASE_FONT_PX;
+}
+
+/**
+ * Row height for a code font size, keeping the default 12px/20px ratio so a
+ * larger Appearance → Fonts code size does not overlap rows. Null (the
+ * default size) is exactly UNIFIED_LINE_PX.
+ */
+export function unifiedLinePx(codeFontPx: number | null): number {
+  if (codeFontPx == null) return UNIFIED_LINE_PX;
+  return Math.round((codeFontPx * UNIFIED_LINE_PX) / UNIFIED_BASE_FONT_PX);
+}
 
 export type DiffViewRow =
   | { type: "line"; line: UnifiedLine; stage: boolean; height: number }
@@ -31,12 +50,13 @@ export function flattenVisibleRows(
   blocks: readonly UnifiedBlock[],
   revealFor: (foldId: string) => FoldReveal | undefined,
   canStageHunk = false,
+  linePx = UNIFIED_LINE_PX,
 ): DiffViewRow[] {
   const rows: DiffViewRow[] = [];
   for (const block of blocks) {
     if (block.kind === "fold") {
       const split = revealedFold(block.lines.length, revealFor(block.id));
-      pushLines(rows, block.lines.slice(0, split.head), false);
+      pushLines(rows, block.lines.slice(0, split.head), false, linePx);
       if (split.hidden > 0) {
         rows.push({
           type: "fold",
@@ -50,6 +70,7 @@ export function flattenVisibleRows(
           rows,
           block.lines.slice(block.lines.length - split.tail),
           false,
+          linePx,
         );
       }
       continue;
@@ -64,7 +85,7 @@ export function flattenVisibleRows(
         type: "line",
         line: stage && line.pos == null && pos != null ? { ...line, pos } : line,
         stage,
-        height: line.kind === "hunk" ? UNIFIED_HUNK_PX : UNIFIED_LINE_PX,
+        height: line.kind === "hunk" ? UNIFIED_HUNK_PX : linePx,
       });
     }
   }
@@ -153,6 +174,7 @@ function pushLines(
   rows: DiffViewRow[],
   lines: readonly UnifiedLine[],
   canStage: boolean,
+  linePx: number,
 ) {
   for (const line of lines) {
     const stage =
@@ -161,7 +183,7 @@ function pushLines(
       type: "line",
       line,
       stage,
-      height: line.kind === "hunk" ? UNIFIED_HUNK_PX : UNIFIED_LINE_PX,
+      height: line.kind === "hunk" ? UNIFIED_HUNK_PX : linePx,
     });
   }
 }

@@ -35,13 +35,15 @@ import {
   flattenVisibleRows,
   layoutRows,
   UNIFIED_FOLD_PX,
-  UNIFIED_HUNK_PX,
-  UNIFIED_LINE_PX,
+  UNIFIED_GUTTER_PX,
   UNIFIED_OVERSCAN_PX,
+  unifiedCodeScale,
+  unifiedLinePx,
   windowRows,
   type DiffViewRow,
   type RowWindow,
 } from "../model/unifiedDiffWindow";
+import { useCodeFontSize } from "../../settings/model/fonts";
 
 export type UnifiedDiffFileModel = {
   id: string;
@@ -561,14 +563,20 @@ function VirtualRows({
   const [commentTarget, setCommentTarget] = useState<DiffCommentDraft | null>(
     null,
   );
+  const codeFontPx = useCodeFontSize();
+  const linePx = unifiedLinePx(codeFontPx);
+  // Gutter width and the ch-based min width were tuned for 12px code; scale
+  // them with a custom code size (exactly 1 at the default).
+  const codeScale = unifiedCodeScale(codeFontPx);
   const rows = useMemo(
     () =>
       flattenVisibleRows(
         blocks,
         (foldId) => reveals[foldId],
         !!canStageHunk && !!onStageHunk,
+        linePx,
       ),
-    [blocks, canStageHunk, fileId, onStageHunk, reveals],
+    [blocks, canStageHunk, fileId, linePx, onStageHunk, reveals],
   );
   const rowLayout = useMemo(() => layoutRows(rows), [rows]);
   const totalHeight = rowLayout.totalHeight;
@@ -707,7 +715,7 @@ function VirtualRows({
 
       const scale =
         event.deltaMode === 1
-          ? UNIFIED_LINE_PX
+          ? linePx
           : event.deltaMode === 2
             ? verticalScroller.clientHeight
             : 1;
@@ -722,7 +730,7 @@ function VirtualRows({
 
     code.addEventListener("wheel", onWheel, { passive: false });
     return () => code.removeEventListener("wheel", onWheel);
-  }, [near, scrollerRef]);
+  }, [linePx, near, scrollerRef]);
 
   if (!near) {
     return <div style={{ height: totalHeight }} />;
@@ -778,14 +786,26 @@ function VirtualRows({
           hoverAtY(null);
         }}
       >
-        <div className="relative z-10 w-12 shrink-0" style={lanePad}>
+        <div
+          className="relative z-10 w-12 shrink-0"
+          style={
+            codeScale === 1
+              ? lanePad
+              : { ...lanePad, width: `${UNIFIED_GUTTER_PX * codeScale}px` }
+          }
+        >
           {renderLane("gutter")}
         </div>
         <div
           ref={codeRef}
           className="min-w-0 flex-1 overflow-x-auto overscroll-x-none"
         >
-          <div style={{ ...lanePad, minWidth: `max(100%, ${minWidthCh}ch)` }}>
+          <div
+            style={{
+              ...lanePad,
+              minWidth: `max(100%, ${minWidthCh * codeScale}ch)`,
+            }}
+          >
             {renderLane("code")}
           </div>
         </div>
@@ -851,6 +871,7 @@ function DiffLane({
   return (
     <DiffLineRow
       line={row.line}
+      height={row.height}
       lane={lane}
       hovered={hovered}
       commenting={commenting}
@@ -904,6 +925,7 @@ function FoldBar({
 
 const DiffLineRow = memo(function DiffLineRow({
   line,
+  height,
   lane,
   hovered,
   commenting,
@@ -912,6 +934,8 @@ const DiffLineRow = memo(function DiffLineRow({
   onComment,
 }: {
   line: UnifiedLine;
+  /** From the row layout, so rows match the virtualized offsets exactly. */
+  height: number;
   lane: Lane;
   hovered: boolean;
   commenting: boolean;
@@ -923,7 +947,7 @@ const DiffLineRow = memo(function DiffLineRow({
     return (
       <div
         className="flex items-center bg-content/5"
-        style={{ height: UNIFIED_HUNK_PX }}
+        style={{ height }}
       >
         {lane === "code" ? (
           <span className="px-3 font-mono text-[11px] leading-none text-content/40">
@@ -952,7 +976,7 @@ const DiffLineRow = memo(function DiffLineRow({
     return (
       <div
         className={`relative flex items-center ${row}`}
-        style={{ height: UNIFIED_LINE_PX }}
+        style={{ height }}
       >
         {gutterTint ? (
           <span
@@ -960,7 +984,7 @@ const DiffLineRow = memo(function DiffLineRow({
           />
         ) : null}
         <span
-          className={`relative block w-full pr-2 text-right font-mono text-[11px] leading-none tabular-nums ${gutterText}`}
+          className={`relative block w-full pr-2 text-right font-mono text-[length:calc(var(--font-size-code,12px)-1px)] leading-none tabular-nums ${gutterText}`}
         >
           {number ?? ""}
         </span>
@@ -1001,12 +1025,12 @@ const DiffLineRow = memo(function DiffLineRow({
   return (
     <div
       className={`flex items-center ${row}`}
-      style={{ height: UNIFIED_LINE_PX }}
+      style={{ height }}
     >
       {/* Width is counted in minWidthCh. select-none keeps the glyph and the
           screen-reader cue out of copied code. */}
       <span
-        className={`w-7 shrink-0 select-none pl-3 font-mono text-[12px] leading-none font-semibold ${gutterText}`}
+        className={`w-7 shrink-0 select-none pl-3 font-mono text-[length:var(--font-size-code,12px)] leading-none font-semibold ${gutterText}`}
       >
         <span aria-hidden="true">{added ? "+" : deleted ? "−" : ""}</span>
         {added || deleted ? (
@@ -1014,7 +1038,7 @@ const DiffLineRow = memo(function DiffLineRow({
         ) : null}
       </span>
       <span
-        className={`whitespace-pre pr-3 font-mono text-[12px] leading-none text-content/80 ${
+        className={`whitespace-pre pr-3 font-mono text-[length:var(--font-size-code,12px)] leading-none text-content/80 ${
           line.kind === "context" ? "opacity-70" : ""
         }`}
       >

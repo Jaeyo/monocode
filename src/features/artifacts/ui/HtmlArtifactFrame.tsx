@@ -41,10 +41,16 @@ function readTheme(): FrameTheme {
   CHART_COLORS.forEach((value, index) => {
     vars[`--chart-${index + 1}`] = resolve(value);
   });
+  // The font variables chain through var() (user override → built-in
+  // stack), so read the resolved font-family rather than the raw token
+  // string, which the frame could not resolve on its own.
+  const resolveFont = (name: string) => {
+    probe.style.fontFamily = `var(${name})`;
+    return getComputedStyle(probe).fontFamily;
+  };
+  vars["--font-sans"] = resolveFont("--font-sans");
+  vars["--font-mono"] = resolveFont("--font-mono");
   probe.remove();
-  const style = getComputedStyle(root);
-  vars["--font-sans"] = style.getPropertyValue("--font-sans").trim();
-  vars["--font-mono"] = style.getPropertyValue("--font-mono").trim();
   vars["--radius"] = "10px";
   return {
     scheme: root.classList.contains("theme-light") ? "light" : "dark",

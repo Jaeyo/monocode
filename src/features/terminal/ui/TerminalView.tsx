@@ -20,6 +20,10 @@ import {
 } from "../model/terminalTab";
 import { isLightScheme, SCHEME_CHANGE_EVENT } from "../../settings/model/appearance";
 import {
+  loadTerminalFontSize,
+  subscribeFontSettings,
+} from "../../settings/model/fonts";
+import {
   applyTerminalChrome,
   fitTerminal,
   resetGridStretch,
@@ -164,7 +168,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       cursorBlink: true,
       cursorStyle: "bar",
       fontFamily: terminalFont(),
-      fontSize: 13,
+      fontSize: loadTerminalFontSize(),
       lineHeight: 1,
       letterSpacing: 0,
       scrollback: 5000,
@@ -353,6 +357,25 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     };
 
     applySizeRef.current = applySize;
+    // Appearance → Fonts: --font-terminal is already rewritten on <html> by
+    // the time this runs, so re-read it. A TUI's stretched letter-spacing and
+    // line-height were sized for the old cell, so drop them and refit.
+    const unsubscribeFonts = subscribeFontSettings(() => {
+      const fontFamily = terminalFont();
+      const fontSize = loadTerminalFontSize();
+      if (
+        term.options.fontFamily === fontFamily &&
+        term.options.fontSize === fontSize
+      ) {
+        return;
+      }
+      term.options.fontFamily = fontFamily;
+      term.options.fontSize = fontSize;
+      resetGridStretch(term);
+      lastCols = 0;
+      lastRows = 0;
+      schedule();
+    });
     const renderSub = term.onRender(() => {
       if (!spawned.current) applySize();
     });
@@ -372,6 +395,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       host.removeEventListener("copy", onCopy);
       host.removeEventListener("paste", onPaste);
       window.removeEventListener(SCHEME_CHANGE_EVENT, onSchemeChange);
+      unsubscribeFonts();
       dataSub.dispose();
       oscFg.dispose();
       oscBg.dispose();

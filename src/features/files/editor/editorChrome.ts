@@ -1,8 +1,9 @@
 import { syntaxHighlighting } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorView, ViewPlugin } from "@codemirror/view";
 import { cspStyleNonce } from "../../../shared/lib/csp";
 import type { ColorScheme } from "../../settings/model/appearance";
+import { subscribeFontSettings } from "../../settings/model/fonts";
 import { editorHighlightStyleFor } from "./editorLanguage";
 
 export {
@@ -17,7 +18,7 @@ function editorThemeStyles(dark: boolean) {
       height: "100%",
       backgroundColor: "transparent",
       color: "var(--color-content)",
-      fontSize: "13px",
+      fontSize: "var(--font-size-code, 13px)",
       userSelect: "text",
     },
     "&.cm-focused": {
@@ -122,6 +123,16 @@ function editorThemeStyles(dark: boolean) {
 }
 
 /**
+ * The code font and size are CSS variables, so changing them restyles the
+ * editor without CodeMirror noticing; its cached line heights would then
+ * misplace the cursor and gutters until the next resize.
+ */
+const remeasureOnFontChange = ViewPlugin.define((view) => {
+  const unsubscribe = subscribeFontSettings(() => view.requestMeasure());
+  return { destroy: unsubscribe };
+});
+
+/**
  * The theme, plus whatever CSP nonce its style sheet needs. CodeMirror mounts
  * every rule it owns — base theme included — through style-mod at runtime, so a
  * style-src that rejects inline sheets leaves the editor completely unstyled.
@@ -131,6 +142,7 @@ export function editorThemeFor(scheme: ColorScheme): Extension {
   return [
     editorThemeStyles(scheme === "dark"),
     EditorView.cspNonce.of(cspStyleNonce()),
+    remeasureOnFontChange,
   ];
 }
 
