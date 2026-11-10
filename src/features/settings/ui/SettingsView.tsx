@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ConnectionsSettings } from "../../connections/ui/ConnectionsSettings";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
+  AlertCircle,
   ArrowDownCircle,
   Check,
   ChevronDown,
@@ -43,6 +44,11 @@ import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import { JiraSettings } from "./JiraSettings";
 import { GradientBlurBackground } from "./GradientBlurBackground";
 import { McpSettings } from "./McpSettings";
+import {
+  FontFamilyPicker,
+  isFontMissing,
+  useSystemFonts,
+} from "./FontFamilyPicker";
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
 import { RemoveProjectDialog } from "../../projects/ui/RemoveProjectDialog";
 import { WindowControls } from "../../../app/shell/WindowControls";
@@ -195,6 +201,17 @@ import {
   projectName,
 } from "../../../shared/lib/paths";
 import { revealPath } from "../../../platform/tauri/fs";
+import {
+  FONT_SIZES,
+  resetFontSettings,
+  saveFontFamily,
+  saveFontSize,
+  TERMINAL_FONT_SIZE_DEFAULT,
+  useFontFamily,
+  useFontSize,
+  type FontSizeTarget,
+  type FontTarget,
+} from "../model/fonts";
 import { useTasks } from "../../tasks/model/tasksStore";
 import { promptForTasksRoot } from "../../tasks/model/tasksRoot";
 import {
@@ -2170,6 +2187,7 @@ function useAppearanceSettings(
     if (chatBackgroundPath) void onClearChatBackground();
     onUiScale(Math.round(UI_SCALE_DEFAULT * 100));
     onCollapsedProjectRailMode(COLLAPSED_PROJECT_RAIL_MODE_DEFAULT);
+    resetFontSettings();
   }, [
     chatBackgroundPath,
     onBlur,
@@ -2229,6 +2247,186 @@ function useAppearanceSettings(
     onCollapsedProjectRailMode,
     restoreDefaults,
   };
+}
+
+const FONT_SAMPLES: Record<FontTarget, string> = {
+  interface:
+    "The quick brown fox jumps over the lazy dog. 다람쥐 헌 쳇바퀴에 타고파. 0123456789",
+  code: "const value = 0O1lI; // => != === 한글 {}[]",
+  // Powerline arrow, branch and folder glyphs from the Nerd Font range.
+  terminal: "~/monocode   main  src $ ls -la 0O1lI 한글",
+};
+
+const FONT_SAMPLE_VARS: Record<FontTarget, string> = {
+  interface: "var(--font-sans)",
+  code: "var(--font-mono)",
+  terminal: "var(--font-terminal)",
+};
+
+/**
+ * Appearance → Fonts. Each family applies as soon as it is picked; the
+ * sample under it renders through the same CSS variable the app uses, so it
+ * shows exactly what changed. The installed list loads on first open, or
+ * right away when a saved family needs its "not installed" check.
+ */
+function FontsGroup() {
+  const families: Record<FontTarget, string> = {
+    interface: useFontFamily("interface"),
+    code: useFontFamily("code"),
+    terminal: useFontFamily("terminal"),
+  };
+  const codeSize = useFontSize("code");
+  const terminalSize = useFontSize("terminal");
+  const [wantFonts, setWantFonts] = useState(false);
+  const anySaved = Object.values(families).some((value) => value !== "");
+  const fonts = useSystemFonts(wantFonts || anySaved);
+  const onWantFonts = useCallback(() => setWantFonts(true), []);
+
+  const familyControl = (target: FontTarget, label: string) => (
+    <>
+      <FontFamilyPicker
+        label={label}
+        target={target}
+        value={families[target]}
+        onChange={(value) => saveFontFamily(target, value)}
+        fonts={fonts}
+        onWantFonts={onWantFonts}
+      />
+      {families[target] ? (
+        <ResetFontButton
+          label={label}
+          onClick={() => saveFontFamily(target, "")}
+        />
+      ) : null}
+    </>
+  );
+
+  const sizeControl = (
+    target: FontSizeTarget,
+    label: string,
+    value: number | null,
+    defaultLabel: string,
+  ) => (
+    <Select
+      label={label}
+      value={value == null ? "" : String(value)}
+      options={[
+        { value: "", label: defaultLabel },
+        ...FONT_SIZES.map((size) => ({
+          value: String(size),
+          label: `${size}px`,
+        })),
+      ]}
+      onChange={(next) =>
+        saveFontSize(target, next === "" ? null : Number(next))
+      }
+    />
+  );
+
+  const sample = (target: FontTarget, fontSize: string) => (
+    <FontSample
+      target={target}
+      value={families[target]}
+      fontSize={fontSize}
+      missing={isFontMissing(families[target], fonts)}
+    />
+  );
+
+  return (
+    <Group
+      title="Fonts"
+      description="Pick an installed font or type any name. A single font falls back to the built-in stack for characters it lacks; a comma-separated stack is used exactly as typed."
+    >
+      <Row
+        id="font-interface"
+        label="Interface font"
+        description="Menus, chat and every other UI text. Size follows Interface scale."
+        footer={sample("interface", "13px")}
+      >
+        {familyControl("interface", "Interface font")}
+      </Row>
+      <Row
+        id="font-code"
+        label="Code font"
+        description="Code blocks, the file editor and diffs. The size applies to code text, not to monospace labels."
+        footer={sample("code", "var(--font-size-code, 12px)")}
+      >
+        {familyControl("code", "Code font")}
+        {sizeControl("code", "Code font size", codeSize, "Default size")}
+      </Row>
+      <Row
+        id="font-terminal"
+        label="Terminal font"
+        description="Integrated terminals. A Nerd Font keeps prompt icons intact."
+        footer={sample(
+          "terminal",
+          `${terminalSize ?? TERMINAL_FONT_SIZE_DEFAULT}px`,
+        )}
+      >
+        {familyControl("terminal", "Terminal font")}
+        {sizeControl(
+          "terminal",
+          "Terminal font size",
+          terminalSize,
+          `Default (${TERMINAL_FONT_SIZE_DEFAULT}px)`,
+        )}
+      </Row>
+    </Group>
+  );
+}
+
+function ResetFontButton({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  const text = `Reset ${label.toLowerCase()} to default`;
+  return (
+    <button
+      type="button"
+      title={text}
+      aria-label={text}
+      onClick={onClick}
+      className="grid size-7 shrink-0 place-items-center rounded-md text-content/50 outline-none hover:bg-content/8 hover:text-content focus-visible:bg-content/8"
+    >
+      <RotateCcw className="size-3.5" strokeWidth={1.75} />
+    </button>
+  );
+}
+
+function FontSample({
+  target,
+  value,
+  fontSize,
+  missing,
+}: {
+  target: FontTarget;
+  value: string;
+  fontSize: string;
+  missing: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <p
+        data-font-sample={target}
+        className="truncate rounded-md border border-content/8 bg-content/3 px-2.5 py-2 text-content/80"
+        style={{ fontFamily: FONT_SAMPLE_VARS[target], fontSize }}
+      >
+        {FONT_SAMPLES[target]}
+      </p>
+      {missing ? (
+        <p
+          role="status"
+          className="flex items-center gap-1.5 text-[12px] text-amber-500"
+        >
+          <AlertCircle className="size-3.5 shrink-0" strokeWidth={1.75} />
+          {`“${value}” isn't installed on this computer, so the default font is shown instead.`}
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
@@ -2339,6 +2537,8 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           />
         </Row>
       </Group>
+
+      <FontsGroup />
 
       <Group
         title="Translucency"
@@ -4353,15 +4553,38 @@ function Row({
   label,
   description,
   children,
+  footer,
 }: {
   /** Matches a `SETTINGS_INDEX` id so search can scroll here. */
   id?: string;
   label: ReactNode;
   description?: string;
   children?: ReactNode;
+  /** Full-width content under the label and controls, e.g. a preview. */
+  footer?: ReactNode;
 }) {
   const revealed = useContext(RevealedSetting);
   const flash = id != null && revealed === id;
+
+  if (footer != null) {
+    return (
+      <div
+        id={id ? settingDomId(id) : undefined}
+        data-setting-id={id}
+        className={`border-b border-content/5 px-4 py-3.5 transition-colors last:border-b-0 ${
+          flash ? "bg-accent/10" : ""
+        }`}
+      >
+        <div className="settings-row flex items-start gap-6">
+          <RowLabel label={label} description={description} />
+          <div className="settings-row-control flex min-w-0 max-w-[60%] shrink-0 flex-wrap items-center justify-end gap-2">
+            {children}
+          </div>
+        </div>
+        <div className="mt-3">{footer}</div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -4371,17 +4594,29 @@ function Row({
         flash ? "bg-accent/10" : ""
       }`}
     >
-      <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-medium text-content">{label}</div>
-        {description ? (
-          <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-            {description}
-          </p>
-        ) : null}
-      </div>
+      <RowLabel label={label} description={description} />
       <div className="settings-row-control flex min-w-0 max-w-[60%] shrink-0 flex-wrap items-center justify-end gap-2">
         {children}
       </div>
+    </div>
+  );
+}
+
+function RowLabel({
+  label,
+  description,
+}: {
+  label: ReactNode;
+  description?: string;
+}) {
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="text-[13px] font-medium text-content">{label}</div>
+      {description ? (
+        <p className="mt-1 text-[12px] leading-relaxed text-content/45">
+          {description}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -337,6 +337,26 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "black brightness contrast background",
   },
   {
+    id: "font-interface",
+    section: "appearance",
+    label: "Interface font",
+    keywords: "font typeface family ui sans text",
+  },
+  {
+    id: "font-code",
+    section: "appearance",
+    label: "Code font",
+    keywords:
+      "font typeface family monospace mono editor diff code block size",
+  },
+  {
+    id: "font-terminal",
+    section: "appearance",
+    label: "Terminal font",
+    keywords:
+      "font typeface family monospace nerd font xterm shell size",
+  },
+  {
     id: "sidebar-opacity",
     section: "appearance",
     label: "Sidebar opacity",

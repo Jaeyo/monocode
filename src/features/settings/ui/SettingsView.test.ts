@@ -2,7 +2,7 @@
 import { act, createElement, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { SettingsView } from "./SettingsView";
 import { rememberNotificationProjects } from "../../notifications/model/notificationProjects";
@@ -34,6 +34,7 @@ import {
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => undefined),
   convertFileSrc: (path: string) => path,
+  isTauri: vi.fn(() => false),
 }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
@@ -1137,6 +1138,162 @@ describe("providers scope inheritance", () => {
     expect(cursorToggle.hasAttribute("disabled")).toBe(true);
     expect(cursorToggle.closest(".settings-row")?.textContent).toContain(
       "Hidden globally",
+    );
+  });
+});
+
+describe("appearance fonts", () => {
+  async function typeInto(input: HTMLInputElement, value: string) {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  function fontRow(id: string): HTMLElement {
+    return container.querySelector<HTMLElement>(`[data-setting-id="${id}"]`)!;
+  }
+
+  function trigger(label: string): HTMLButtonElement {
+    return container.querySelector<HTMLButtonElement>(
+      `button[aria-label^="${label}: "]`,
+    )!;
+  }
+
+  function fontOptions(): HTMLButtonElement[] {
+    return Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    );
+  }
+
+  const rootVar = (name: string) =>
+    document.documentElement.style.getPropertyValue(name);
+
+  afterEach(() => {
+    document.documentElement.removeAttribute("style");
+    vi.mocked(isTauri).mockReturnValue(false);
+  });
+
+  it("applies a typed family, then resets it from the row", async () => {
+    await render("appearance");
+    await act(async () => trigger("Code font").click());
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+
+    const input = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Search or type a font name"]',
+    )!;
+    await typeInto(input, "Iosevka Term");
+    expect(fontOptions().map((option) => option.textContent)).toContain(
+      "Use “Iosevka Term”",
+    );
+    await act(async () =>
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      ),
+    );
+
+    expect(localStorage.getItem("monocode.fontCode")).toBe("Iosevka Term");
+    expect(rootVar("--font-mono")).toBe(
+      '"Iosevka Term", var(--font-mono-default)',
+    );
+    expect(trigger("Code font").getAttribute("aria-label")).toBe(
+      "Code font: Iosevka Term",
+    );
+
+    const reset = fontRow("font-code").querySelector<HTMLButtonElement>(
+      'button[aria-label="Reset code font to default"]',
+    )!;
+    await act(async () => reset.click());
+    expect(localStorage.getItem("monocode.fontCode")).toBeNull();
+    expect(rootVar("--font-mono")).toBe("");
+    expect(
+      fontRow("font-code").querySelector('[aria-label^="Reset code font"]'),
+    ).toBeNull();
+  });
+
+  it("sets the code and terminal sizes, Default clearing them", async () => {
+    await render("appearance");
+    await act(async () => trigger("Code font size").click());
+    const fifteen = fontOptions().find(
+      (option) => option.textContent === "15px",
+    )!;
+    await act(async () => fifteen.click());
+
+    expect(localStorage.getItem("monocode.fontSizeCode")).toBe("15");
+    expect(rootVar("--font-size-code")).toBe("15px");
+
+    expect(trigger("Terminal font size").getAttribute("aria-label")).toBe(
+      "Terminal font size: Default (13px)",
+    );
+    await act(async () => trigger("Code font size").click());
+    const defaultSize = fontOptions().find(
+      (option) => option.textContent === "Default size",
+    )!;
+    await act(async () => defaultSize.click());
+    expect(localStorage.getItem("monocode.fontSizeCode")).toBeNull();
+    expect(rootVar("--font-size-code")).toBe("");
+  });
+
+  it("lists installed fonts, monospace first for code, and flags a missing saved font", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(invoke).mockImplementation(async (command: string) =>
+      command === "list_system_fonts"
+        ? [
+            { family: "Helvetica", monospace: false },
+            { family: "Menlo", monospace: true },
+          ]
+        : undefined,
+    );
+    localStorage.setItem("monocode.fontTerminal", "Nope Font");
+
+    await render("appearance");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(invoke).toHaveBeenCalledWith("list_system_fonts");
+    expect(fontRow("font-terminal").textContent).toContain(
+      "“Nope Font” isn't installed on this computer",
+    );
+    expect(fontRow("font-code").querySelector('[role="status"]')).toBeNull();
+
+    await act(async () => trigger("Code font").click());
+    expect(fontOptions().map((option) => option.textContent)).toEqual([
+      "Default",
+      "Menlo",
+    ]);
+    const monoOnly = document.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]',
+    )!;
+    await act(async () => monoOnly.click());
+    expect(fontOptions().map((option) => option.textContent)).toEqual([
+      "Default",
+      "Helvetica",
+      "Menlo",
+    ]);
+    await act(async () => fontOptions()[2]!.click());
+    expect(localStorage.getItem("monocode.fontCode")).toBe("Menlo");
+  });
+
+  it("Restore defaults clears every font setting", async () => {
+    localStorage.setItem("monocode.fontInterface", "Pretendard");
+    localStorage.setItem("monocode.fontSizeTerminal", "16");
+    await render("appearance");
+
+    const restore = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Restore defaults")!;
+    await act(async () => restore.click());
+
+    expect(localStorage.getItem("monocode.fontInterface")).toBeNull();
+    expect(localStorage.getItem("monocode.fontSizeTerminal")).toBeNull();
+    expect(trigger("Interface font").getAttribute("aria-label")).toBe(
+      "Interface font: Default",
     );
   });
 });

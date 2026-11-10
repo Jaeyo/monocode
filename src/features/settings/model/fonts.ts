@@ -218,10 +218,22 @@ export function watchFontSettings(): () => void {
 }
 
 export function useCodeFontSize(): number | null {
+  return useFontSize("code");
+}
+
+export function useFontSize(target: FontSizeTarget): number | null {
   return useSyncExternalStore(
     subscribeFontSettings,
-    () => loadFontSize("code"),
+    () => loadFontSize(target),
     () => null,
+  );
+}
+
+export function useFontFamily(target: FontTarget): string {
+  return useSyncExternalStore(
+    subscribeFontSettings,
+    () => loadFontFamily(target),
+    () => "",
   );
 }
 
