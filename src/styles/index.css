@@ -22,14 +22,19 @@
   }
 }
 
+/* An external theme (Scene, see settings/model/externalTheme.ts) sets the
+   --theme-* properties inline on <html>; every token below falls back to the
+   built-in color when it is absent. */
 @theme {
   /* Preserve descenders in compact labels, including two 10px lines in a 30px tab. */
   --leading-label: 1.4;
-  --color-background-base: hsl(
-    var(--theme-hue) var(--theme-saturation) var(--background-lightness)
+  --color-background-base: var(
+    --theme-background,
+    hsl(var(--theme-hue) var(--theme-saturation) var(--background-lightness))
   );
-  --color-content: hsl(
-    var(--theme-hue) var(--theme-saturation) var(--content-lightness)
+  --color-content: var(
+    --theme-foreground,
+    hsl(var(--theme-hue) var(--theme-saturation) var(--content-lightness))
   );
   /* Structural separators: use border-stroke, divide-stroke, or bg-stroke. */
   --color-stroke: color-mix(in srgb, var(--color-content) 7%, transparent);
@@ -60,9 +65,9 @@
     var(--color-content) var(--selection-emphasis-strength),
     transparent
   );
-  --color-accent: hsl(211 92% 62%);
-  --color-skill: #e8c547;
-  --color-mention: #38bdf8;
+  --color-accent: var(--theme-accent, hsl(211 92% 62%));
+  --color-skill: var(--theme-skill, #e8c547);
+  --color-mention: var(--theme-mention, #38bdf8);
   /* Defaults live in :root below as --font-*-default; Appearance → Fonts
      overrides these inline on <html> (see settings/model/fonts.ts). */
   --font-mono: var(--font-mono-default);
@@ -71,8 +76,8 @@
      readable text on the theme background, `-bg`/`-gutter` are row tints.
      Palettes below swap them; diff UI must also show a +/- glyph so color is
      never the only cue. */
-  --color-diff-add: #10b981;
-  --color-diff-add-fg: #6ee7b7;
+  --color-diff-add: var(--theme-diff-add, #10b981);
+  --color-diff-add-fg: var(--theme-diff-add-fg, #6ee7b7);
   --color-diff-add-bg: color-mix(
     in srgb,
     var(--color-diff-add) 15%,
@@ -83,8 +88,8 @@
     var(--color-diff-add) 25%,
     transparent
   );
-  --color-diff-del: #f43f5e;
-  --color-diff-del-fg: #fda4af;
+  --color-diff-del: var(--theme-diff-del, #f43f5e);
+  --color-diff-del-fg: var(--theme-diff-del-fg, #fda4af);
   --color-diff-del-bg: color-mix(
     in srgb,
     var(--color-diff-del) 15%,
@@ -145,10 +150,10 @@
   --selection-emphasis-strength: 20%;
   --background-lightness: var(--theme-dark-lightness);
   --content-lightness: 92%;
-  --link-color: #7dd3fc;
-  --color-skill: #e8c547;
-  --color-mention: #38bdf8;
-  --color-markdown-heading: #f9a8c9;
+  --link-color: var(--theme-link, #7dd3fc);
+  --color-skill: var(--theme-skill, #e8c547);
+  --color-mention: var(--theme-mention, #38bdf8);
+  --color-markdown-heading: var(--theme-heading, #f9a8c9);
 }
 
 html {
@@ -158,17 +163,17 @@ html {
 html.theme-light {
   --background-lightness: 97%;
   --content-lightness: 18%;
-  --link-color: hsl(211 92% 40%);
-  --color-skill: #a07c10;
-  --color-mention: #0284c7;
-  --color-markdown-heading: #be185d;
+  --link-color: var(--theme-link, hsl(211 92% 40%));
+  --color-skill: var(--theme-skill, #a07c10);
+  --color-mention: var(--theme-mention, #0284c7);
+  --color-markdown-heading: var(--theme-heading, #be185d);
   --selection-subtle-strength: 5%;
   --selection-strength: 6%;
   --selection-strong-strength: 7%;
   --selection-hover-strength: 10%;
   --selection-emphasis-strength: 14%;
-  --color-diff-add-fg: #047857;
-  --color-diff-del-fg: #be123c;
+  --color-diff-add-fg: var(--theme-diff-add-fg, #047857);
+  --color-diff-del-fg: var(--theme-diff-del-fg, #be123c);
   color-scheme: light;
 }
 
@@ -653,7 +658,10 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
 }
 
 ::highlight(monocode-transcript-search-match) {
-  background-color: color-mix(in srgb, #e2c08d 46%, transparent);
+  background-color: var(
+    --theme-search,
+    color-mix(in srgb, #e2c08d 46%, transparent)
+  );
 }
 
 ::highlight(monocode-transcript-search-current) {
@@ -3701,9 +3709,10 @@ html.theme-light .btw-burst {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 11px;
-  border: 1px solid color-mix(in srgb, #f87171 24%, transparent);
+  border: 1px solid
+    color-mix(in srgb, var(--theme-error, #f87171) 24%, transparent);
   border-radius: 10px;
-  background: color-mix(in srgb, #f87171 7%, transparent);
+  background: color-mix(in srgb, var(--theme-error, #f87171) 7%, transparent);
 }
 
 /* The selected project mascot turns banked resets into a tiny status scene. */

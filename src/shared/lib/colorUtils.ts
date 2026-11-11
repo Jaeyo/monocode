@@ -89,6 +89,13 @@ export function hslToRgb(
   return { r: channel(r), g: channel(g), b: channel(b) };
 }
 
+/** `#rrggbb` or `#rrggbbaa` (alpha ignored) to channels. */
+export function hexToRgb(hex: string): Rgb {
+  const channel = (offset: number) =>
+    Number.parseInt(hex.slice(offset, offset + 2), 16) || 0;
+  return { r: channel(1), g: channel(3), b: channel(5) };
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }

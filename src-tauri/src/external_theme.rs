@@ -139,7 +139,7 @@ fn signature(base: &Path) -> Signature {
 }
 
 /// Polls the files once a second and tells every window when they change.
-/// Polling two small paths costs less than a file-system watcher dependency,
+/// Polling a few small files costs less than a file-system watcher dependency,
 /// and a theme switch only needs to show within a second.
 pub fn init(app: &AppHandle) {
     let Ok(base) = data_dir(app) else {
@@ -157,8 +157,9 @@ pub fn init(app: &AppHandle) {
                     continue;
                 }
                 last = next;
-                let payload = read_from(&base).ok().flatten();
-                let _ = app.emit(CHANGED_EVENT, payload);
+                // Windows read the theme again themselves, so they also see why
+                // a selection cannot be read.
+                let _ = app.emit(CHANGED_EVENT, ());
             }
         })
         .ok();

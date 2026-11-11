@@ -1,9 +1,22 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { hslToRgb, isHexColor, type Rgb } from "../../../shared/lib/colorUtils";
+import {
+  hexToRgb,
+  hslToRgb,
+  isHexColor,
+  type Rgb,
+} from "../../../shared/lib/colorUtils";
 import { IS_LINUX, IS_MAC } from "../../../platform/tauri/platform";
 import { readFlag, writeFlag } from "./storageFlags";
 import { applyUiScale, loadUiScale } from "./uiScale";
 import { applyFontSettings, watchFontSettings } from "./fonts";
+import {
+  currentExternalTheme,
+  EXTERNAL_THEME_FILE_KEY,
+  EXTERNAL_THEME_VARIABLE_NAMES,
+  externalThemeScheme,
+  externalThemeVariables,
+  watchExternalTheme,
+} from "./externalTheme";
 import {
   applyPreparedNewThreadBackground,
   clearPreparedNewThreadBackground,
@@ -311,6 +324,7 @@ const THEME_KEYS = new Set([
   THEME_SATURATION_KEY,
   THEME_DARK_LIGHTNESS_KEY,
   SCHEME_KEY,
+  EXTERNAL_THEME_FILE_KEY,
 ]);
 
 function applyStoredTheme() {
@@ -324,6 +338,9 @@ export function initAppearance() {
   document.documentElement.classList.toggle("is-mac", IS_MAC);
   applyStoredTheme();
   watchSystemColorScheme();
+  // Each workspace window reads the file itself; the stored copy then reaches
+  // windows that never ask Rust, through the storage event below.
+  watchExternalTheme(applyStoredTheme);
   // Settings applies a theme change only to its own window. Other windows
   // hear about it through the storage event, which never fires in the
   // window that wrote the value.
@@ -373,8 +390,27 @@ function systemColorScheme(): ColorScheme {
   return systemQuery()?.matches ? "light" : "dark";
 }
 
+/** An external theme (Scene) decides the look while it is selected. */
 export function resolveColorScheme(value: ThemePreference): ColorScheme {
+  const external = currentExternalTheme();
+  if (external) return externalThemeScheme(external, systemColorScheme());
   return value === "system" ? systemColorScheme() : value;
+}
+
+/** Sets the external theme's colors for `scheme`, or removes them. */
+function applyExternalThemeVariables(scheme: ColorScheme) {
+  const root = document.documentElement;
+  const variant = currentExternalTheme()?.variants[scheme];
+  root.classList.toggle("has-external-theme", variant != null);
+  if (!variant) {
+    for (const name of EXTERNAL_THEME_VARIABLE_NAMES) {
+      root.style.removeProperty(name);
+    }
+    return;
+  }
+  for (const [name, value] of Object.entries(externalThemeVariables(variant))) {
+    root.style.setProperty(name, value);
+  }
 }
 
 export function isLightScheme(): boolean {
@@ -383,6 +419,7 @@ export function isLightScheme(): boolean {
 
 export function applyThemePreference(value: ThemePreference): ColorScheme {
   const next = resolveColorScheme(value);
+  applyExternalThemeVariables(next);
   document.documentElement.classList.toggle("theme-light", next === "light");
   if (nativeGlassReady) syncNativeGlass(next);
   window.dispatchEvent(
@@ -400,6 +437,9 @@ export function applyThemePreference(value: ThemePreference): ColorScheme {
 
 /** The page colour, also used by the native macOS glass tint. */
 function opaqueWindowBackground(): Rgb {
+  const external =
+    currentExternalTheme()?.variants[isLightScheme() ? "light" : "dark"];
+  if (external) return hexToRgb(external.interface.background);
   const style = getComputedStyle(document.documentElement);
   const read = (name: string, fallback: number) => {
     const value = Number.parseFloat(style.getPropertyValue(name));
@@ -502,7 +542,9 @@ export function watchSystemColorScheme() {
   if (!query) return;
   query.addEventListener("change", () => {
     const preference = loadThemePreference();
-    if (preference === "system") applyThemePreference(preference);
+    if (preference === "system" || currentExternalTheme()) {
+      applyThemePreference(preference);
+    }
   });
 }
 
