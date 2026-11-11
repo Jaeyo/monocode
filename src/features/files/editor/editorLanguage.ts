@@ -73,30 +73,32 @@ type HighlightPalette = {
   invalid: string;
 };
 
+// An external theme (settings/model/externalTheme.ts) sets --theme-syntax-*;
+// without one these fall back to the built-in colors.
 const HIGHLIGHT_PALETTE: Record<ColorScheme, HighlightPalette> = {
   dark: {
-    keyword: "#ff8ffd",
+    keyword: "var(--theme-syntax-keyword, #ff8ffd)",
     heading: "var(--color-markdown-heading)",
-    callable: "#a5d5fe",
-    string: "#b4fa72",
-    type: "#ff8272",
-    number: "#b4fa72",
-    comment: "#fefdc2",
-    property: "#d0d1fe",
-    meta: "#8e8e8e",
-    invalid: "#ffc4bd",
+    callable: "var(--theme-syntax-callable, #a5d5fe)",
+    string: "var(--theme-syntax-string, #b4fa72)",
+    type: "var(--theme-syntax-type, #ff8272)",
+    number: "var(--theme-syntax-number, #b4fa72)",
+    comment: "var(--theme-syntax-comment, #fefdc2)",
+    property: "var(--theme-syntax-property, #d0d1fe)",
+    meta: "var(--theme-syntax-meta, #8e8e8e)",
+    invalid: "var(--theme-syntax-invalid, #ffc4bd)",
   },
   light: {
-    keyword: "#a626a4",
+    keyword: "var(--theme-syntax-keyword, #a626a4)",
     heading: "var(--color-markdown-heading)",
-    callable: "#4078f2",
-    string: "#50a14f",
-    type: "#c18401",
-    number: "#986801",
-    comment: "#8a9199",
-    property: "#e45649",
-    meta: "#5c6370",
-    invalid: "#cf222e",
+    callable: "var(--theme-syntax-callable, #4078f2)",
+    string: "var(--theme-syntax-string, #50a14f)",
+    type: "var(--theme-syntax-type, #c18401)",
+    number: "var(--theme-syntax-number, #986801)",
+    comment: "var(--theme-syntax-comment, #8a9199)",
+    property: "var(--theme-syntax-property, #e45649)",
+    meta: "var(--theme-syntax-meta, #5c6370)",
+    invalid: "var(--theme-syntax-invalid, #cf222e)",
   },
 };
 

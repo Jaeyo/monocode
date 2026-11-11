@@ -20,6 +20,7 @@ import {
   loadThemeSaturation,
   watchSystemColorScheme,
 } from "../settings/model/appearance";
+import { EXTERNAL_THEME_FILE_KEY } from "../settings/model/externalTheme";
 import {
   applyFontSettings,
   watchFontSettings,
@@ -43,6 +44,7 @@ function applyFloatingAppearance() {
     loadSidebarOpacity(),
     loadSidebarBlur(),
     loadBodyGlass(),
+    localStorage.getItem(EXTERNAL_THEME_FILE_KEY),
   ]);
   if (nextKey === appearanceKey) return;
   appearanceKey = nextKey;

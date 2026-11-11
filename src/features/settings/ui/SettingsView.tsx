@@ -65,6 +65,7 @@ import {
   applySidebarBlur,
   applySidebarOpacity,
   applyThemeDarkLightness,
+  applyStoredTheme,
   applyThemePreference,
   applyThemeTint,
   BODY_GLASS_DEFAULT,
@@ -140,6 +141,12 @@ import {
   type NewThreadBackgroundEffect,
   type TranscriptLayout,
 } from "../model/appearance";
+import {
+  clearExternalTheme,
+  currentExternalTheme,
+  externalThemeError,
+  subscribeExternalTheme,
+} from "../model/externalTheme";
 import {
   pickAndSaveChatBackground,
   removeChatBackground,
@@ -2429,9 +2436,71 @@ function FontSample({
   );
 }
 
+function useExternalTheme() {
+  const theme = useSyncExternalStore(
+    subscribeExternalTheme,
+    currentExternalTheme,
+    currentExternalTheme,
+  );
+  const error = useSyncExternalStore(
+    subscribeExternalTheme,
+    externalThemeError,
+    externalThemeError,
+  );
+  return { theme, error };
+}
+
+/** Shown while another app (Scene) themes MonoCode, or failed to. */
+function ExternalThemeRow() {
+  const { theme, error } = useExternalTheme();
+  const [busy, setBusy] = useState(false);
+  const [clearError, setClearError] = useState<string | null>(null);
+  if (!theme && !error) return null;
+
+  const restoreBuiltIn = async () => {
+    setBusy(true);
+    setClearError(null);
+    try {
+      await clearExternalTheme(applyStoredTheme);
+    } catch (reason) {
+      setClearError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const problem = clearError ?? error;
+
+  return (
+    <Row
+      label="External theme"
+      description={
+        theme
+          ? `${theme.name} (${theme.file}) was set by another app, such as Scene. It chooses the colors and light or dark; the settings below come back when you use the built-in theme.`
+          : "Another app selected a theme MonoCode can't read, so the built-in theme is shown."
+      }
+      footer={
+        problem ? (
+          <p
+            role="status"
+            className="flex items-center gap-1.5 text-[12px] text-amber-500"
+          >
+            <AlertCircle className="size-3.5 shrink-0" strokeWidth={1.75} />
+            {problem}
+          </p>
+        ) : undefined
+      }
+    >
+      <SecondaryButton onClick={() => void restoreBuiltIn()} disabled={busy}>
+        Use built-in theme
+      </SecondaryButton>
+    </Row>
+  );
+}
+
 function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
   const percent = Math.round(appearance.opacity * 100);
   const glassDisabled = useColorScheme() === "light";
+  const external = useExternalTheme().theme != null;
 
   return (
     <>
@@ -2439,10 +2508,15 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         title="Theme"
         description="Dark and light share the same tint, so the color settings below apply to both."
       >
+        <ExternalThemeRow />
         <Row
           id="theme"
           label="Theme"
-          description="System follows the OS appearance."
+          description={
+            external
+              ? "The external theme chooses light or dark while it is applied."
+              : "System follows the OS appearance."
+          }
         >
           <Segmented
             label="Theme"
@@ -2485,7 +2559,11 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
 
       <Group
         title="Color"
-        description="Hue and saturation tint every surface. Lightness only moves the dark theme."
+        description={
+          external
+            ? "The external theme sets every color while it is applied. Your values are kept."
+            : "Hue and saturation tint every surface. Lightness only moves the dark theme."
+        }
       >
         <Row
           id="hue"
@@ -2501,6 +2579,7 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             onChange={(value) =>
               appearance.onTint(value, appearance.themeSaturation)
             }
+            disabled={external}
           />
         </Row>
         <Row
@@ -2515,6 +2594,7 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             min={THEME_SATURATION_MIN}
             max={THEME_SATURATION_MAX}
             onChange={(value) => appearance.onTint(appearance.themeHue, value)}
+            disabled={external}
           />
         </Row>
         <Row
@@ -2533,7 +2613,7 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             min={THEME_DARK_LIGHTNESS_MIN}
             max={THEME_DARK_LIGHTNESS_MAX}
             onChange={appearance.onDarkLightness}
-            disabled={glassDisabled}
+            disabled={glassDisabled || external}
           />
         </Row>
       </Group>

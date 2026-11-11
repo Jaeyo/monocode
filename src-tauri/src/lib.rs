@@ -14,6 +14,7 @@ mod devin_config;
 mod devin_usage;
 mod external_editor;
 mod external_sessions;
+mod external_theme;
 mod fs;
 mod github_host;
 mod github_inbox;
@@ -272,6 +273,7 @@ pub fn run() {
             control::init(app.handle())?;
             reminders::init(app.handle());
             checkpoint::init(app.handle())?;
+            external_theme::init(app.handle());
             menu::install(app.handle())?;
             #[cfg(target_os = "windows")]
             tray::install(app.handle())?;
@@ -643,6 +645,8 @@ pub fn run() {
             window_transfer::stage_window_transfer,
             window_transfer::take_window_transfer,
             system_fonts::list_system_fonts,
+            external_theme::read_external_theme,
+            external_theme::clear_external_theme,
             chat_background::save_chat_background,
             chat_background::remove_chat_background,
             chat_background::save_project_chat_background,

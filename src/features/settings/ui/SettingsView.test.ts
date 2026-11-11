@@ -1297,3 +1297,75 @@ describe("appearance fonts", () => {
     );
   });
 });
+
+describe("external theme", () => {
+  const ROLES = [
+    "background", "surface", "overlay", "border", "foreground", "muted",
+    "accent", "selection", "cursor", "currentLine", "search", "error",
+    "warning", "success", "info",
+  ];
+
+  function storeExternalTheme() {
+    const look = {
+      interface: Object.fromEntries(ROLES.map((role) => [role, "#1a1b26"])),
+      terminal: {
+        background: "#1a1b26",
+        foreground: "#a9b1d6",
+        cursor: "#c0caf5",
+        cursorText: "#1a1b26",
+        selectionBackground: "#292e42",
+        selectionForeground: "#c0caf5",
+        ansi: Array.from({ length: 16 }, () => "#7aa2f7"),
+      },
+    };
+    localStorage.setItem(
+      "monocode.externalThemeFile",
+      JSON.stringify({
+        name: "scene.json",
+        source: JSON.stringify({
+          format: 1,
+          theme: { id: "scene/tokyo-night", name: "Tokyo Night" },
+          mode: "dark",
+          variants: { dark: look },
+        }),
+      }),
+    );
+  }
+
+  const hue = () =>
+    container.querySelector<HTMLInputElement>('input[aria-label="Hue"]');
+
+  afterEach(() => {
+    document.documentElement.removeAttribute("style");
+  });
+
+  it("names the theme another app set and holds the built-in colors", async () => {
+    storeExternalTheme();
+    await render("appearance");
+
+    expect(container.textContent).toContain("External theme");
+    expect(container.textContent).toContain("Tokyo Night (scene.json)");
+    expect(hue()?.disabled).toBe(true);
+  });
+
+  it("returns to the built-in theme", async () => {
+    storeExternalTheme();
+    await render("appearance");
+    const button = Array.from(container.querySelectorAll("button")).find(
+      (node) => node.textContent === "Use built-in theme",
+    );
+
+    await act(async () => button?.click());
+
+    expect(invoke).toHaveBeenCalledWith("clear_external_theme");
+    expect(localStorage.getItem("monocode.externalThemeFile")).toBeNull();
+    expect(container.textContent).not.toContain("External theme");
+    expect(hue()?.disabled).toBe(false);
+  });
+
+  it("hides the row when no app set a theme", async () => {
+    await render("appearance");
+    expect(container.textContent).not.toContain("External theme");
+    expect(hue()?.disabled).toBe(false);
+  });
+});
