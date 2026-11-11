@@ -327,7 +327,8 @@ const THEME_KEYS = new Set([
   EXTERNAL_THEME_FILE_KEY,
 ]);
 
-function applyStoredTheme() {
+/** Applies every stored theme setting, including the external theme. */
+export function applyStoredTheme() {
   applyAccentColor(loadAccentColor());
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
   applyThemeDarkLightness(loadThemeDarkLightness());
