@@ -5,6 +5,7 @@ import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 import { describe, expect, it, vi } from "vitest";
 import {
   createBoundedCodePlugin,
+  EXTERNAL_THEME,
   type BoundedCodePlugin,
 } from "./codeHighlightPlugin";
 
@@ -288,5 +289,19 @@ describe("bounded code highlight plugin", () => {
     expect(colors.size).toBeGreaterThan(1);
     const plain = await highlight(plugin, "anything", "not-a-language");
     expect(text(plain)).toBe("anything");
+  }, 20_000);
+
+  it("colors code with the external theme's CSS properties", async () => {
+    const plugin = createBoundedCodePlugin({
+      themes: () => [EXTERNAL_THEME, EXTERNAL_THEME],
+    });
+    const colored = await highlight(plugin, "const x = 1;", "typescript");
+    const keyword = colored.tokens
+      .flat()
+      .find((token) => token.content === "const");
+    const style = keyword?.htmlStyle as Record<string, string> | undefined;
+    expect(style?.color ?? keyword?.color).toBe(
+      "var(--theme-shiki-token-keyword)",
+    );
   }, 20_000);
 });

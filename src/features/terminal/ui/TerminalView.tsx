@@ -103,17 +103,45 @@ const ANSI_LIGHT = {
   brightWhite: "#ffffff",
 };
 
+/** A color an external theme set on <html> (externalTheme.ts), or "". */
+function externalThemeColor(name: string): string {
+  return getComputedStyle(document.documentElement)
+    .getPropertyValue(name)
+    .trim();
+}
+
 function terminalTheme(light: boolean) {
+  const builtIn = light ? ANSI_LIGHT : ANSI_DARK;
+  // Same order as the theme file's 16 ANSI colors.
+  const ansi = Object.fromEntries(
+    (Object.keys(builtIn) as (keyof typeof builtIn)[]).map((name, index) => [
+      name,
+      externalThemeColor(`--theme-ansi-${index}`) || builtIn[name],
+    ]),
+  );
+  const selection = externalThemeColor("--theme-terminal-selection-background");
+  const selectionForeground = externalThemeColor(
+    "--theme-terminal-selection-foreground",
+  );
   return {
     background: "#00000000",
-    foreground: cssColor("var(--color-content)", light ? "#2e2e2e" : "#e8eef2"),
-    cursor: cssColor("var(--color-accent)", light ? "#4078f2" : "#4da3f5"),
-    cursorAccent: light ? "#ffffff" : "#000000",
-    selectionBackground: light ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.18)",
-    selectionInactiveBackground: light
-      ? "rgba(0,0,0,0.08)"
-      : "rgba(255,255,255,0.08)",
-    ...(light ? ANSI_LIGHT : ANSI_DARK),
+    foreground: cssColor(
+      "var(--theme-terminal-foreground, var(--color-content))",
+      light ? "#2e2e2e" : "#e8eef2",
+    ),
+    cursor: cssColor(
+      "var(--theme-terminal-cursor, var(--color-accent))",
+      light ? "#4078f2" : "#4da3f5",
+    ),
+    cursorAccent:
+      externalThemeColor("--theme-terminal-cursor-text") ||
+      (light ? "#ffffff" : "#000000"),
+    selectionBackground:
+      selection || (light ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.18)"),
+    selectionInactiveBackground:
+      selection || (light ? "rgba(0,0,0,0.08)" : "rgba(255,255,255,0.08)"),
+    ...(selectionForeground ? { selectionForeground } : {}),
+    ...ansi,
   };
 }
 
@@ -135,7 +163,7 @@ function oscColors() {
   const light = isLightScheme();
   return {
     fg: cssHexColor(
-      "var(--color-content)",
+      "var(--theme-terminal-foreground, var(--color-content))",
       light ? "#2e2e2e" : "#ebebeb",
     ),
     bg: cssHexColor(
@@ -143,7 +171,7 @@ function oscColors() {
       light ? "#f7f7f7" : "#171717",
     ),
     cursor: cssHexColor(
-      "var(--color-accent)",
+      "var(--theme-terminal-cursor, var(--color-accent))",
       light ? "#4078f2" : "#4da3f5",
     ),
   };

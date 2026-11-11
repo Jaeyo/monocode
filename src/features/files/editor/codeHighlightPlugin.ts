@@ -6,11 +6,16 @@ import type {
 import {
   bundledLanguages,
   bundledLanguagesInfo,
+  createCssVariablesTheme,
   createHighlighter,
   type BundledLanguage,
   type GrammarState,
 } from "shiki";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+import {
+  currentExternalTheme,
+  SHIKI_VARIABLE_PREFIX,
+} from "../../settings/model/externalTheme";
 
 /**
  * `@streamdown/code` keeps every token result in a module-level Map that is
@@ -25,6 +30,23 @@ import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
  * a remounted block briefly shows plain text while it is highlighted again.
  */
 const DEFAULT_THEMES: [ThemeInput, ThemeInput] = ["github-light", "github-dark"];
+type ThemePair = [ThemeInput, ThemeInput];
+
+/**
+ * While an external theme is selected, code blocks color tokens with the
+ * --theme-shiki-* properties it sets (externalTheme.ts), so switching between
+ * two external themes needs no new highlight.
+ */
+export const EXTERNAL_THEME = createCssVariablesTheme({
+  name: "monocode-external",
+  variablePrefix: SHIKI_VARIABLE_PREFIX,
+  fontStyle: true,
+});
+const EXTERNAL_THEMES: ThemePair = [EXTERNAL_THEME, EXTERNAL_THEME];
+
+export function codeThemes(): ThemePair {
+  return currentExternalTheme() ? EXTERNAL_THEMES : DEFAULT_THEMES;
+}
 const MAX_ENTRIES = 100;
 const MAX_CACHED_CHARS = 500_000;
 
@@ -55,7 +77,8 @@ function themeName(theme: ThemeInput): string {
 
 export function createBoundedCodePlugin(
   options: {
-    themes?: [ThemeInput, ThemeInput];
+    /** A pair, or a function that picks the pair at each highlight. */
+    themes?: ThemePair | (() => ThemePair);
     maxEntries?: number;
     maxChars?: number;
   } = {},
@@ -109,7 +132,7 @@ export function createBoundedCodePlugin(
     type: "code-highlighter",
     supportsLanguage: (language) => supported.has(normalizeLanguage(language)),
     getSupportedLanguages: () => Array.from(supported) as BundledLanguage[],
-    getThemes: () => themes,
+    getThemes: () => (typeof themes === "function" ? themes() : themes),
     cachedResults: () => results.size,
     highlight({ code, language, themes: pair }, callback) {
       const lang = normalizeLanguage(language);
@@ -209,4 +232,4 @@ export function createBoundedCodePlugin(
   };
 }
 
-export const boundedCode = createBoundedCodePlugin();
+export const boundedCode = createBoundedCodePlugin({ themes: codeThemes });

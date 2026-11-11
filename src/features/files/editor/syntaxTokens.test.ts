@@ -7,9 +7,9 @@ import {
   highlightSource,
 } from "./syntaxTokens";
 
-const KEYWORD_DARK = "#ff8ffd";
-const STRING_DARK = "#b4fa72";
-const COMMENT_DARK = "#fefdc2";
+const KEYWORD_DARK = "var(--theme-syntax-keyword, #ff8ffd)";
+const STRING_DARK = "var(--theme-syntax-string, #b4fa72)";
+const COMMENT_DARK = "var(--theme-syntax-comment, #fefdc2)";
 
 describe("highlightSource", () => {
   it("colors TypeScript keywords, strings, and comments", () => {

@@ -3,6 +3,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type ReactElement,
 } from "react";
@@ -10,6 +11,23 @@ import type { BundledLanguage } from "shiki";
 import type { HighlightResult } from "@streamdown/code";
 import { CodeBlockContainer, CodeBlockHeader } from "streamdown";
 import { boundedCode } from "../../files/editor/codeHighlightPlugin";
+import {
+  currentExternalTheme,
+  subscribeExternalTheme,
+} from "../../settings/model/externalTheme";
+
+/** Code blocks switch between shiki's themes and the external theme's. */
+function externalThemeActive(): boolean {
+  return currentExternalTheme() != null;
+}
+
+function useExternalThemeActive(): boolean {
+  return useSyncExternalStore(
+    subscribeExternalTheme,
+    externalThemeActive,
+    externalThemeActive,
+  );
+}
 
 type Tokens = HighlightResult["tokens"][number];
 
@@ -111,6 +129,7 @@ export function HighlightedCodeBlock({
   startLine?: number;
 }) {
   const source = code.replace(/\n+$/, "");
+  const externalTheme = useExternalThemeActive();
   const [highlighted, setHighlighted] = useState<{
     language: string;
     result: HighlightResult;
@@ -132,7 +151,7 @@ export function HighlightedCodeBlock({
     return () => {
       current = false;
     };
-  }, [source, language]);
+  }, [source, language, externalTheme]);
   const result =
     highlighted?.language === language ? highlighted.result : undefined;
   return (
